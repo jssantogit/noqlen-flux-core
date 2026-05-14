@@ -299,6 +299,23 @@ MusicLab scoring calibration exists to evaluate `CandidateRisk` before real prov
 
 The calibration does not download, route, stage, delete, or evaluate audio quality. It helps calibrate scoring profiles before real provider usage. The default dataset includes good candidates, suspicious-but-not-auto-bad candidates, clearly bad candidates, and false-positive guards (e.g., "alive" must not trigger "live" detection).
 
+### MusicLab Quality Calibration
+
+MusicLab quality calibration exists to evaluate `QualityResult` and `QualityGrade` before real audio analysis is active. It uses fake findings and Flux-owned models to verify that `QualityService` classifies excellent, medium, bad, and unknown cases correctly, separating objective failures from heuristic warnings.
+
+- `QualityCalibrationExpectation` defines what a calibration case should produce (expected grade, min confidence, expected finding codes, expected objective/heuristic codes).
+- `QualityCalibrationCase` pairs an item_id, optional relative_path, fake findings, and an expectation.
+- `QualityCalibrationDataset` is a versioned collection of calibration cases.
+- `QualityCalibrationCaseResult` records whether a case passed, the expected and actual grade/confidence, and any errors or warnings.
+- `QualityCalibrationReport` aggregates all case results with pass/fail counts.
+- `MusicLabQualityService` builds the default dataset, runs calibration against `QualityService`, and returns a `FluxResult` with a logical calibration report artifact.
+
+The calibration does not read audio, use ffmpeg, download, route, stage, cleanup, delete, or call providers. It helps calibrate quality profiles before real provider usage. The default dataset includes excellent cases (no findings), medium cases (heuristic warnings only), bad objective cases (decode failure, no audio stream, zero-byte, invalid duration, below confidence floor, corrupt file), bad suspicious cases (strong low-pass, suspicious source, bitrate mismatch, weak HF energy), and unknown cases (insufficient data, not analyzed, low confidence).
+
+`CandidateRisk` remains separate from `QualityGrade`. `CandidateRisk` is a pre-download risk signal; `QualityGrade` is a post-download quality classification. Quality calibration does not import scoring or routing services.
+
+`QualityGrade` remains separate from `RoutingDecision`. Quality calibration does not call `RoutingDecisionService`, `StagingPlanService`, `CleanupPlanningService`, or `SafeFileOperationService`. Heuristic warnings such as low-pass, clipping, loudness, or transcode suspicion must not delete or route automatically. Objective failures can inform future routing but do not execute actions here.
+
 ## Reports And Artifacts
 
 Reports are audit artifacts derived from structured results: operation status, summary, steps, warnings, errors, planned changes, applied changes, and artifacts. The report module provides deterministic-enough JSON for tests and simple human-readable text for inspection.

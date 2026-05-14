@@ -81,6 +81,22 @@ Suspicious terms produce risk and warnings, not quality, routing, or delete deci
 
 False-positive tests are required for suspicious-term matching. Terms like "alive", "olive", "premix", and "delivery" must not trigger false suspicious-term penalties when they appear as exact words in candidate metadata.
 
+### MusicLab Quality Calibration
+
+Quality calibration fixtures must not use real music library paths. All findings are fake and constructed in memory.
+
+Quality calibration is non-destructive. It does not write files, alter quality thresholds, adjust profiles, or decide routing/download/staging/delete.
+
+Heuristic warnings such as low-pass, clipping, loudness, transcode suspicion must not delete or route automatically. They remain informational until MusicLab calibration establishes strong thresholds.
+
+Objective failures can inform future routing but still as a plan only. They do not execute delete, quarantine, or rejection in this commit.
+
+Fake quality cases must not contain raw fingerprints, lyrics, provider payloads, or personal paths.
+
+Quality calibration does not call `RoutingDecisionService`, `StagingPlanService`, `CleanupPlanningService`, or `SafeFileOperationService`. It does not access the network, use ffmpeg, read audio, or depend on any real provider.
+
+`CandidateRisk` remains separate from `QualityGrade`. `QualityGrade` remains separate from `RoutingDecision`.
+
 ## Provider Health And Capabilities
 
 Health and status checks must not perform downloads, create files, or access the network on their own. `ProviderService` calls only the generic `health()` and `capabilities()` contracts on providers and returns structured results.

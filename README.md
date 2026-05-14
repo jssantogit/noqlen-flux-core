@@ -105,6 +105,20 @@ noqlen-flux musiclab scoring run
 
 The calibration evaluates good, suspicious, bad, and false-positive cases against the default scoring profile and returns a structured report with pass/fail counts. This is fake/lab only and does not alter thresholds, profiles, or decide routing/download/staging/delete.
 
+### MusicLab Quality Calibration
+
+MusicLab includes a quality calibration layer to verify that `QualityService` classifies quality results correctly before real audio analysis is active. The calibration uses fake findings only — no network, no download, no real music library, no ffmpeg, no audio reading.
+
+Run quality calibration:
+
+```bash
+noqlen-flux musiclab quality run
+```
+
+The calibration evaluates excellent, medium, bad objective, bad suspicious, and unknown cases against the default quality profile and returns a structured report with pass/fail counts. This is fake/lab only and does not analyze real audio, use ffmpeg, read audio files, decide routing/staging/delete, or call providers.
+
+`CandidateRisk` remains separate from `QualityGrade`. `QualityGrade` remains separate from `RoutingDecision`.
+
 ## Generic Search Providers
 
 Flux search is provider-based. Core services depend on generic contracts such as search queries, candidates, provider results, and provider health instead of any `slskd` model or native Soulseek implementation.

@@ -7,6 +7,7 @@ from .downloads import DownloadPlanningService
 from .fileops import SafeFileOperationService
 from .handoff import HandoffManifestService
 from .musiclab import MusicLabService
+from .musiclab_quality import MusicLabQualityService
 from .musiclab_scoring import MusicLabScoringService
 from .providers import ProviderService
 from .quality import QualityService
@@ -26,6 +27,7 @@ __all__ = [
     "DownloadPlanningService",
     "FluxService",
     "HandoffManifestService",
+    "MusicLabQualityService",
     "MusicLabScoringService",
     "MusicLabService",
     "ProviderService",

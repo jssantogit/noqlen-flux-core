@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
     musiclab_scoring_run = musiclab_scoring_subparsers.add_parser("run", help="Run scoring calibration against default fake dataset")
     musiclab_scoring_run.set_defaults(func=run_musiclab_scoring_run)
 
+    musiclab_quality = musiclab_subparsers.add_parser("quality", help="Run quality calibration in MusicLab")
+    musiclab_quality_subparsers = musiclab_quality.add_subparsers(dest="musiclab_quality_command")
+    musiclab_quality_run = musiclab_quality_subparsers.add_parser("run", help="Run quality calibration against default fake dataset")
+    musiclab_quality_run.set_defaults(func=run_musiclab_quality_run)
+
     download = subparsers.add_parser("download", help="Plan safe download operations")
     download_subparsers = download.add_subparsers(dest="download_command")
 
@@ -338,6 +343,14 @@ def run_musiclab_scoring_run(_args: argparse.Namespace) -> int:
     from noqlen_flux.services import MusicLabScoringService
 
     result = MusicLabScoringService().run_calibration()
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_quality_run(_args: argparse.Namespace) -> int:
+    from noqlen_flux.services import MusicLabQualityService
+
+    result = MusicLabQualityService().run_calibration()
     print(_render_result(result))
     return _exit_code(result.status)
 
@@ -949,6 +962,28 @@ def _render_result(result: FluxResult) -> str:
         if total_bytes is not None:
             lines.append(f"planned-bytes: {total_bytes}")
     if result.operation == "musiclab-scoring":
+        dataset_id = result.summary.get("dataset_id")
+        if dataset_id is not None:
+            lines.append(f"dataset: {dataset_id}")
+        dataset_version = result.summary.get("dataset_version")
+        if dataset_version is not None:
+            lines.append(f"dataset_version: {dataset_version}")
+        profile_name = result.summary.get("profile_name")
+        if profile_name is not None:
+            lines.append(f"profile: {profile_name}")
+        total_cases = result.summary.get("total_cases")
+        if total_cases is not None:
+            lines.append(f"total_cases: {total_cases}")
+        passed_cases = result.summary.get("passed_cases")
+        if passed_cases is not None:
+            lines.append(f"passed: {passed_cases}")
+        failed_cases = result.summary.get("failed_cases")
+        if failed_cases is not None:
+            lines.append(f"failed: {failed_cases}")
+        failed_ids = result.summary.get("failed_case_ids")
+        if failed_ids:
+            lines.append(f"failed_case_ids: {', '.join(failed_ids)}")
+    if result.operation == "musiclab-quality":
         dataset_id = result.summary.get("dataset_id")
         if dataset_id is not None:
             lines.append(f"dataset: {dataset_id}")
