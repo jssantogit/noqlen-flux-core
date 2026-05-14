@@ -15,6 +15,22 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - A minimal Python package named `noqlen_flux`.
 - A public future CLI entry point named `noqlen-flux`.
 - Initial structured result contracts and a service-first base.
-- Safe stub commands only.
+- Safe workspace inspection and initialization primitives.
 
-No operation currently touches a real music library or downloads music.
+No operation currently performs real search, downloads, network calls, imports, cleanup, or music library writes.
+
+## Safe Workspace
+
+Flux-owned staging directories can be planned without writing anything:
+
+```bash
+noqlen-flux workspace init ./flux-workspace --dry-run
+```
+
+Apply mode must be explicit before directories are created:
+
+```bash
+noqlen-flux workspace init ./flux-workspace --apply
+```
+
+Workspace initialization creates only Flux-controlled directories such as `incoming`, `approved`, `quarantine`, `rejected`, `reports`, `manifests`, `cache`, and `tmp`, after path containment and symlink safety checks.

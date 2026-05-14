@@ -18,9 +18,13 @@ Flux services return structured `FluxResult` objects composed of statuses, steps
 
 Services must not depend on `argparse`, terminal formatting, `print()`, `input()`, Rich, Click, or UI concerns. They should express workflow state through result objects and keep side-effect policy explicit.
 
+`WorkspaceService` owns workspace inspection, dry-run planning, apply-mode directory creation, and path safety enforcement. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, warnings, and errors instead of terminal output.
+
 ## CLI Adapter
 
 The CLI remains a thin adapter. It parses command-line arguments, calls services, renders human-readable output, and maps `Status` values to process exit codes.
+
+Workspace CLI commands are adapters over `WorkspaceService`: `workspace inspect PATH` inspects the layout, while `workspace init PATH --dry-run` plans missing directories and `workspace init PATH --apply` creates them after service-level safety checks.
 
 ## Future Controllers
 

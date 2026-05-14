@@ -2,5 +2,6 @@
 
 from .base import FluxService
 from .doctor import DoctorService
+from .workspace import WorkspaceService
 
-__all__ = ["DoctorService", "FluxService"]
+__all__ = ["DoctorService", "FluxService", "WorkspaceService"]
