@@ -18,6 +18,18 @@ Locked files are represented at candidate-file level before any download workflo
 
 Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `DownloadArtifact` define the future provider/core boundary without implementing download, queues, transfers, or artifacts on disk.
 
+## Slskd Adapter Skeleton
+
+A skeleton `SlskdProvider` adapter exists under `providers/slskd.py`. It is an **external adapter**, not Flux core. It implements the generic `SearchProvider` contract and maps slskd-like payloads into Flux-owned models (`SearchCandidate`, `CandidateFile`, `ProviderHealth`).
+
+- `SlskdProviderConfig` holds optional `base_url`, `api_key` (redacted in serialization), and `timeout_seconds`.
+- `SlskdClientProtocol` is an injectable protocol for future network clients. This commit provides `FakeSlskdClient` for tests only.
+- `SlskdPayloadMapper` contains pure mapping functions that convert slskd-like response dicts into Flux models. It does not access the network, write files, or expose raw payloads.
+- `SlskdProvider` without an injected client returns `ProviderAvailability.UNAVAILABLE` and controlled errors. It does **not** perform network calls.
+- Core services do **not** import `providers.slskd`. They depend on `BaseProvider`, `SearchProvider`, and `TransferProvider` contracts only.
+- A future `NativeSoulseekProvider` can implement the same contracts and replace `SlskdProvider` without rewriting the core.
+- This commit does not perform network calls, real downloads, or real slskd integration.
+
 ## Provider Boundary
 
 Provider adapters implement the generic `SearchProvider` and `TransferProvider` contracts through a shared `BaseProvider` interface: `name`, `capabilities()`, and `health()`. Core services depend on these contracts only. They must not import `slskd`, native Soulseek code, terminal UI code, or provider-specific payloads.

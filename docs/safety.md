@@ -107,6 +107,18 @@ Automated tests must use fake providers. Real network health checks belong only 
 
 `ProviderHealth` and `ProviderStatus` are Flux-owned models. A future `slskd` adapter must translate its backend status into these models without leaking internal slskd structures. A future `NativeSoulseekProvider` must implement the same contract.
 
+## Slskd Adapter
+
+The `SlskdProvider` adapter skeleton exists under `providers/slskd.py`. It is an external adapter, not Flux core.
+
+- Slskd adapter tests must use fake payloads and `FakeSlskdClient` only. No real slskd network access is permitted in automated tests.
+- Real slskd network access must be isolated and opt-in in a future commit.
+- `SlskdProviderConfig.api_key` is redacted in `to_dict()` and `__repr__()`. It must never appear in logs, artifacts, or test output.
+- `SlskdPayloadMapper` must not expose raw provider payloads in `SearchCandidate`, `CandidateFile`, or `SearchProviderResult` metadata.
+- No raw provider payload, secrets, private paths, lyrics, or fingerprints should leak through the adapter.
+- Core services must not import `providers.slskd`. They depend on generic contracts only.
+- Without an injected client, `SlskdProvider` returns `UNAVAILABLE` and does not attempt network access.
+
 ## Search Providers
 
 Automated search tests must use fake providers or controlled fixtures. Real network access, real `slskd`, native Soulseek sessions, credentials, live provider APIs, and real downloads are prohibited in automated search tests.
