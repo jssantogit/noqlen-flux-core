@@ -209,6 +209,36 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `StagingPlanService` owns post-download staging plan preparation. It accepts `RoutingPlan` or `RoutingDecision` objects and optional `StagingPolicy`, returns `StagingItem` or `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, move files, delete files, copy files, call providers, or know about `slskd`. It does not execute real staging actions; all changes are planned-only. Real execution will come in a separate future executor layer with explicit apply mode and safety checks.
 
+## File Operation Executor Foundation
+
+File operation execution is a separate core domain from staging plan. `StagingPlan` describes the intention; `FileOperationPlan` describes the concrete filesystem operations that can be performed. `SafeFileOperationService` applies operations only with explicit policy configuration and `--apply` mode.
+
+Flux owns these file operation models:
+
+- `FileOperationType` — operation type: `copy`, `move`, `mark`, `mkdir`, `none`.
+- `FileOperationState` — operation state: `planned`, `skipped`, `applied`, `failed`, `blocked`.
+- `FileOperation` — single operation with operation_id, operation_type, optional source_relative_path, optional target_relative_path, reason, and safe metadata.
+- `FileOperationPlan` — aggregate plan with plan_id, operations, warnings, errors, and safe metadata.
+- `FileOperationResult` — execution result for a single operation: operation_id, operation_type, state, optional source/target paths, message, warnings, errors, and safe metadata.
+- `FileExecutionPolicy` — versioned policy with name, version, description, `allow_move` (default false), `allow_copy` (default true), `allow_mkdir` (default true), `allow_delete` (default false), `allow_overwrite` (default false), and safe metadata.
+
+`SafeFileOperationService` provides service-level file operation planning and execution. It accepts `StagingPlan` or `FileOperationPlan` objects and returns `FluxResult` with `PlannedChange` and `AppliedChange` objects. It does not access the network, delete files, or know about `slskd`.
+
+File operation execution logic:
+
+- Dry-run (default): no files are created, moved, copied, or deleted. Returns `PlannedChange` with state `planned`, `skipped`, or `blocked`.
+- Apply mode (explicit `--apply`): operations are executed within the workspace boundary only. Mkdir, copy, and move are allowed per policy. Overwrite is blocked by default. Source must exist for copy/move. Symlink escape is blocked. Absolute paths and path traversal are blocked. Protected roots are blocked. Returns `AppliedChange` for successfully applied operations.
+- Delete is not implemented in this commit. `mark` operations only flag items as delete-eligible without touching the filesystem.
+
+`StagingPlan` to `FileOperationPlan` conversion:
+
+- `StagingActionType.move` → `FileOperationType.move`, applied only if `policy.allow_move=true`.
+- `StagingActionType.copy` → `FileOperationType.copy`, applied only if `policy.allow_copy=true`.
+- `StagingActionType.mark_delete_eligible` → `FileOperationType.mark`, no real delete.
+- `StagingActionType.plan_only` / `none` → `FileOperationType.none` or skipped.
+
+The separation must remain: staging (planned intention) → fileops (concrete operations) → executor (real execution). `StagingPlanService` does not execute `SafeFileOperationService` automatically. `SafeFileOperationService` consumes `StagingPlan`/`FileOperationPlan` but does not alter staging or routing results.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
@@ -242,6 +272,8 @@ Quality CLI commands are adapters over `QualityService`: `quality fake excellent
 Routing CLI commands are adapters over `RoutingDecisionService`: `routing fake excellent`, `routing fake medium`, `routing fake bad-objective`, `routing fake bad-heuristic`, and `routing fake unknown` simulate post-download routing decisions from fake quality results, call `RoutingDecisionService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement routing logic, move files, delete files, or perform real routing. All routing commands are planned-only and have no `--apply` mode.
 
 Staging CLI commands are adapters over `StagingPlanService`: `staging fake approved`, `staging fake quarantine`, `staging fake rejected`, `staging fake delete-eligible`, and `staging fake review` simulate post-download staging plans from fake routing decisions, call `StagingPlanService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement staging logic, move files, delete files, copy files, or perform real staging. All staging commands are planned-only and have no `--apply` mode.
+
+Fileops CLI commands are adapters over `SafeFileOperationService`: `fileops demo --workspace PATH --dry-run` plans safe filesystem operations without executing them, while `fileops demo --workspace PATH --apply` executes mkdir/copy/move operations within the workspace boundary per policy. The CLI does not implement file operation logic, delete files, or perform operations outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
 
 ## Future Controllers
 

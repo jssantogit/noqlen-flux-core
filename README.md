@@ -28,6 +28,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Post-download quality result contracts and fake simulation service (`QualityGrade`, `QualityFinding`, `QualityResult`, `QualityProfile`, `QualitySummary`).
 - Post-download routing decision contracts and fake planning service (`RoutingOutcome`, `RoutingDecision`, `RoutingPolicy`, `RoutingPlan`).
 - Post-download staging plan contracts and fake planning service (`StagingArea`, `StagingItem`, `StagingPlan`, `StagingPolicy`, `StagingPlanService`).
+- Safe filesystem operation executor with dry-run/apply safety (`FileOperationType`, `FileOperationState`, `FileOperation`, `FileOperationPlan`, `FileOperationResult`, `FileExecutionPolicy`, `SafeFileOperationService`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -254,3 +255,21 @@ noqlen-flux staging fake rejected
 ```
 
 This is not real file staging. Flux still has no file movement, deletion, copy, quarantine execution, or cleanup behavior. All staging plans are planned-only and use `PlannedChange` objects, never `AppliedChange`. `delete_eligible` does not mean deletion has occurred. Real execution will come in a separate future commit with explicit apply mode and safety checks.
+
+## Filesystem Operation Safety Foundation
+
+File operations transform staging plans into concrete filesystem actions with dry-run/apply safety. `SafeFileOperationService` executes mkdir, copy, move, and mark operations within the workspace boundary only. Delete is not implemented. Overwrite is blocked by default. Move is blocked by default unless explicitly allowed by policy.
+
+Plan safe file operations without executing them:
+
+```bash
+noqlen-flux fileops demo --workspace ./flux-workspace --dry-run
+```
+
+Apply mode must be explicit before operations are executed:
+
+```bash
+noqlen-flux fileops demo --workspace ./flux-workspace --apply
+```
+
+This is not real cleanup, auto-delete, or music library management. Flux still has no real download, no `slskd`, no ffmpeg, no quality analysis, and no handoff. All file operations are confined to the workspace root with path containment, symlink protection, and protected-root checks.

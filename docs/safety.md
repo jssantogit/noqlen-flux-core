@@ -196,6 +196,29 @@ Staging contracts must not expose:
 
 `StagingPolicy` is versioned so MusicLab can calibrate staging thresholds before any real provider or file execution is active. The default policy declares `stage: post-download`, `status: contracts-only`, `allow_delete_eligible: false`, and `allow_real_moves: false`.
 
+## File Operations
+
+File operations are governed by `SafeFileOperationService` and `FileExecutionPolicy`. Dry-run is the default: no files are created, moved, copied, or deleted. Apply mode requires an explicit `--apply` flag.
+
+Delete does not exist in this commit. `FileOperationType` has no delete variant. `mark` operations only flag items as delete-eligible without touching the filesystem. `FileExecutionPolicy.allow_delete` is always false and has no effect.
+
+Overwrite is blocked by default. When `allow_overwrite=false` (the default), any operation targeting an existing path is blocked with a warning. Move is blocked by default unless `allow_move=true` is set in an explicit policy. Copy and mkdir are allowed by default but still subject to workspace boundary and path safety checks.
+
+All operations must stay within the workspace root. Path traversal (`..`), absolute paths, symlink escape, and protected roots are blocked before any operation is planned or applied. Source paths that are symlinks resolving outside the workspace are rejected. Target paths that would escape the workspace via symlink are rejected.
+
+`FileOperationResult` states:
+- `planned` — operation would execute in apply mode (dry-run only).
+- `skipped` — operation was unnecessary (e.g., directory already exists).
+- `applied` — operation was successfully executed (apply mode only).
+- `blocked` — operation was prevented by policy or safety check.
+- `failed` — operation could not be executed (e.g., source not found).
+
+Dry-run returns `PlannedChange` objects, never `AppliedChange`. Apply mode returns `AppliedChange` only for operations that were actually executed.
+
+Automated file operation tests must use temporary directories, fake fixtures, or controlled workspace layouts only. They must not use real music files, network access, or personal filesystem paths.
+
+`FileExecutionPolicy` is versioned so MusicLab can calibrate execution thresholds before any real provider or handoff behavior is active. The default policy declares `stage: post-download`, `status: contracts-only`, `allow_move: false`, `allow_delete: false`, and `allow_overwrite: false`.
+
 ## Reports
 
 Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.

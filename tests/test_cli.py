@@ -339,3 +339,26 @@ def test_staging_fake_review_works(capsys) -> None:
     output = capsys.readouterr().out
     assert "staging: success" in output
     assert "staging review: 1" in output
+
+
+def test_fileops_demo_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["fileops", "demo", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "fileops: success" in output
+    assert "mode: dry-run" in output
+    assert not workspace.exists()
+
+
+def test_fileops_demo_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["fileops", "demo", "--workspace", str(workspace), "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "fileops: success" in output
+    assert "mode: apply" in output
+    assert (workspace / "incoming").is_dir()
+    assert (workspace / "approved").is_dir()

@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SearchService, StagingPlanService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingPlanService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -193,6 +193,16 @@ def build_parser() -> argparse.ArgumentParser:
     staging_fake.add_argument("outcome", choices=["approved", "quarantine", "rejected", "delete-eligible", "review"], help="Fake routing outcome to stage")
     staging_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
     staging_fake.set_defaults(func=run_staging_fake)
+
+    fileops = subparsers.add_parser("fileops", help="Plan or execute safe filesystem operations")
+    fileops_subparsers = fileops.add_subparsers(dest="fileops_command")
+
+    fileops_demo = fileops_subparsers.add_parser("demo", help="Demonstrate safe file operations within workspace")
+    fileops_demo.add_argument("--workspace", required=True, help="Workspace root path")
+    fileops_demo_mode = fileops_demo.add_mutually_exclusive_group()
+    fileops_demo_mode.add_argument("--dry-run", action="store_true", help="Plan operations without executing them")
+    fileops_demo_mode.add_argument("--apply", action="store_true", help="Execute planned operations within workspace")
+    fileops_demo.set_defaults(func=run_fileops_demo)
 
     return parser
 
@@ -534,6 +544,41 @@ def run_staging_fake(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_fileops_demo(args: argparse.Namespace) -> int:
+    import uuid
+
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.fileops import FileOperation, FileOperationPlan, FileOperationType
+    from noqlen_flux.services import SafeFileOperationService
+
+    dry_run = not args.apply
+    config = config_from_env(args.workspace, dry_run=dry_run)
+
+    operations = [
+        FileOperation(
+            operation_id=f"demo-mkdir-{uuid.uuid4().hex[:8]}",
+            operation_type=FileOperationType.MKDIR,
+            target_relative_path="incoming",
+            reason="Demo: create incoming directory",
+        ),
+        FileOperation(
+            operation_id=f"demo-mkdir-{uuid.uuid4().hex[:8]}",
+            operation_type=FileOperationType.MKDIR,
+            target_relative_path="approved",
+            reason="Demo: create approved directory",
+        ),
+    ]
+
+    plan = FileOperationPlan(
+        plan_id=f"demo-plan-{uuid.uuid4().hex[:8]}",
+        operations=operations,
+    )
+
+    result = SafeFileOperationService().execute_plan(plan, config, dry_run=dry_run)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _resolve_provider(kind: str):
     if kind == "fake":
         return FakeSearchProvider(
@@ -638,6 +683,28 @@ def _render_result(result: FluxResult) -> str:
         staging_review = result.summary.get("review_count")
         if staging_review is not None:
             lines.append(f"staging review: {staging_review}")
+    if result.operation == "fileops":
+        op_count = result.summary.get("operation_count")
+        if op_count is not None:
+            lines.append(f"operations: {op_count}")
+        mode = result.summary.get("mode")
+        if mode is not None:
+            lines.append(f"mode: {mode}")
+        applied_count = result.summary.get("applied_count")
+        if applied_count is not None:
+            lines.append(f"applied: {applied_count}")
+        planned_count = result.summary.get("planned_count")
+        if planned_count is not None:
+            lines.append(f"planned: {planned_count}")
+        skipped_count = result.summary.get("skipped_count")
+        if skipped_count is not None:
+            lines.append(f"skipped: {skipped_count}")
+        blocked_count = result.summary.get("blocked_count")
+        if blocked_count is not None:
+            lines.append(f"blocked: {blocked_count}")
+        failed_count = result.summary.get("failed_count")
+        if failed_count is not None:
+            lines.append(f"failed: {failed_count}")
     return "\n".join(lines)
 
 
