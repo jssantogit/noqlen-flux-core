@@ -93,6 +93,18 @@ noqlen-flux musiclab session create --workspace ./flux-workspace --purpose "scor
 
 MusicLab does not implement search, `slskd`, downloads, audio inspection, ffmpeg, transcode, cleanup, handoff, network calls, or real music library writes.
 
+### MusicLab Scoring Calibration
+
+MusicLab includes a scoring calibration layer to verify that `CandidateScoringService` classifies candidates correctly before any real provider is active. The calibration uses fake candidates only — no network, no download, no real music library.
+
+Run scoring calibration:
+
+```bash
+noqlen-flux musiclab scoring run
+```
+
+The calibration evaluates good, suspicious, bad, and false-positive cases against the default scoring profile and returns a structured report with pass/fail counts. This is fake/lab only and does not alter thresholds, profiles, or decide routing/download/staging/delete.
+
 ## Generic Search Providers
 
 Flux search is provider-based. Core services depend on generic contracts such as search queries, candidates, provider results, and provider health instead of any `slskd` model or native Soulseek implementation.

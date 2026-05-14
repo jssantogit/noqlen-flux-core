@@ -286,6 +286,19 @@ MusicLab is the foundation for future scoring, quality, routing, quarantine/reje
 
 MusicLab is service-first. The CLI only invokes `MusicLabService` and renders the returned structured result. Future controllers should do the same instead of duplicating calibration logic or bypassing safety checks.
 
+### MusicLab Scoring Calibration
+
+MusicLab scoring calibration exists to evaluate `CandidateRisk` before real providers are active. It uses fake candidates and Flux-owned models to verify that `CandidateScoringService` classifies good, suspicious, and bad candidates correctly.
+
+- `ScoringCalibrationExpectation` defines what a calibration case should produce (min/max score, expected risk, expected penalty/warning codes).
+- `ScoringCalibrationCase` pairs a `SearchQuery`, a `SearchCandidate`, and an expectation.
+- `ScoringCalibrationDataset` is a versioned collection of calibration cases.
+- `ScoringCalibrationCaseResult` records whether a case passed, the actual score and risk, and any errors or warnings.
+- `ScoringCalibrationReport` aggregates all case results with pass/fail counts.
+- `MusicLabScoringService` builds the default dataset, runs calibration against `CandidateScoringService`, and returns a `FluxResult` with a logical calibration report artifact.
+
+The calibration does not download, route, stage, delete, or evaluate audio quality. It helps calibrate scoring profiles before real provider usage. The default dataset includes good candidates, suspicious-but-not-auto-bad candidates, clearly bad candidates, and false-positive guards (e.g., "alive" must not trigger "live" detection).
+
 ## Reports And Artifacts
 
 Reports are audit artifacts derived from structured results: operation status, summary, steps, warnings, errors, planned changes, applied changes, and artifacts. The report module provides deterministic-enough JSON for tests and simple human-readable text for inspection.

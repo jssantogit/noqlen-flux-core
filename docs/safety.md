@@ -71,6 +71,16 @@ MusicLab session and fixture identifiers are restricted to safe basename-like va
 
 MusicLab applies the same workspace containment, symlink escape blocking, and protected-root checks as other Flux services. A symlink that would move MusicLab state outside the workspace is rejected before directory creation or fixture writing.
 
+### MusicLab Scoring Calibration
+
+Scoring calibration fixtures must not use real music library paths. All candidates are fake and constructed in memory.
+
+Scoring calibration is non-destructive. It does not write files, alter scoring thresholds, adjust profiles, or decide routing/download/staging/delete.
+
+Suspicious terms produce risk and warnings, not quality, routing, or delete decisions. `CandidateRisk` is a pre-download signal, not a `QualityGrade`.
+
+False-positive tests are required for suspicious-term matching. Terms like "alive", "olive", "premix", and "delivery" must not trigger false suspicious-term penalties when they appear as exact words in candidate metadata.
+
 ## Provider Health And Capabilities
 
 Health and status checks must not perform downloads, create files, or access the network on their own. `ProviderService` calls only the generic `health()` and `capabilities()` contracts on providers and returns structured results.
