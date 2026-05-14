@@ -26,6 +26,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Provider health, capabilities, and status models with a generic `BaseProvider` interface.
 - `ProviderService` for inspecting provider health and validating capabilities without network access.
 - Post-download quality result contracts and fake simulation service (`QualityGrade`, `QualityFinding`, `QualityResult`, `QualityProfile`, `QualitySummary`).
+- Post-download routing decision contracts and fake planning service (`RoutingOutcome`, `RoutingDecision`, `RoutingPolicy`, `RoutingPlan`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -204,3 +205,27 @@ noqlen-flux quality fake bad
 ```
 
 This is not real audio quality analysis. Flux still has no ffmpeg, transcode detection, spectrogram analysis, decode validation, clipping detection, or low-pass analysis. Real audio inspection will come in a separate future commit after MusicLab calibration establishes thresholds.
+
+## Routing Decision Foundation
+
+Post-download routing decision is a separate Flux domain from both pre-download scoring and post-download quality analysis. `RoutingDecision` (`approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`) represents a planned routing action based on quality signals and policy configuration. It does not move, delete, or quarantine any files.
+
+Route a fake excellent quality result:
+
+```bash
+noqlen-flux routing fake excellent
+```
+
+Route a fake bad quality result with objective failure:
+
+```bash
+noqlen-flux routing fake bad-objective
+```
+
+Route a fake bad quality result with only heuristic warnings:
+
+```bash
+noqlen-flux routing fake bad-heuristic
+```
+
+This is not real file routing. Flux still has no file movement, deletion, quarantine execution, or cleanup behavior. All routing decisions are planned-only and use `PlannedChange` objects, never `AppliedChange`. Real execution will come in a separate future commit with explicit apply mode and safety checks.

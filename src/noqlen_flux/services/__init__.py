@@ -7,6 +7,7 @@ from .musiclab import MusicLabService
 from .providers import ProviderService
 from .quality import QualityService
 from .reports import ReportService
+from .routing import RoutingDecisionService
 from .scoring import CandidateScoringService
 from .search import SearchService
 from .transfers import TransferPlanningService
@@ -21,6 +22,7 @@ __all__ = [
     "ProviderService",
     "QualityService",
     "ReportService",
+    "RoutingDecisionService",
     "SearchService",
     "TransferPlanningService",
     "WorkspaceService",

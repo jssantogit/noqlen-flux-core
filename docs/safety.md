@@ -141,6 +141,30 @@ Quality contracts must not expose:
 
 `QualityProfile` is versioned so MusicLab can calibrate thresholds before any real provider or audio analysis is active. The default profile declares `stage: post-download` and `status: contracts-only`.
 
+## Routing Decisions
+
+Routing decisions are currently planned-only. `RoutingDecisionService` does not move, copy, delete, quarantine, or reject any files. It accepts `QualityResult` objects and returns `RoutingDecision` or `FluxResult` with `PlannedChange` entries, never `AppliedChange`.
+
+`RoutingOutcome` values (`approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`) represent planned decisions, not executed actions. `delete_eligible` does not mean deletion has occurred; it means the item is eligible for future deletion pending explicit policy approval and apply-mode execution.
+
+Future real routing execution must require explicit `--apply` mode with safety checks. It must not touch a real music library, personal music folders, or download folders. All file operations must be confined to the Flux workspace root with path containment and symlink protection.
+
+`RoutingDecision` is separate from both `CandidateRisk` and `QualityGrade`. `CandidateRisk` is a pre-download risk signal. `QualityGrade` is a post-download quality classification. `RoutingDecision` is a planned routing action that combines quality signals with policy configuration. The three must remain separate: scoring does not import routing, quality does not execute routing automatically, and routing does not alter quality results.
+
+Heuristic warnings must never cause `delete_eligible` outcome. They may route to `review` or `quarantine` depending on policy configuration. Objective failures can inform `rejected` or `delete_eligible` outcomes, but only through explicit `RoutingPolicy` configuration with `allow_delete_eligible` set to true.
+
+Automated routing tests must use fake quality data, temporary directories, or controlled fixtures only. They must not use real audio files, network access, file movement tools, or personal filesystem paths.
+
+Routing contracts must not expose:
+
+- Complete lyrics.
+- Raw audio fingerprints.
+- Raw provider payloads.
+- Secrets, tokens, or credentials.
+- Unnecessary personal absolute paths.
+
+`RoutingPolicy` is versioned so MusicLab can calibrate routing thresholds before any real provider or file execution is active. The default policy declares `stage: post-download`, `status: contracts-only`, and `allow_delete_eligible: false`.
+
 ## Reports
 
 Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.

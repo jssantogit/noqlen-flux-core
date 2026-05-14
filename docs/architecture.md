@@ -107,9 +107,38 @@ Heuristic warnings (such as low-pass suspicion, clipping suspicion, or transcode
 
 The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (combined decision). `CandidateScoringService` does not import `QualityService`. `QualityService` does not import `CandidateScoringService`.
 
+## Routing Decision Foundation
+
+Post-download routing decision is a separate core domain from both pre-download scoring and post-download quality analysis. This commit introduces the contracts and fake simulation layer for future file routing actions.
+
+Flux owns these routing models:
+
+- `RoutingOutcome` — planned routing decision: `approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`.
+- `RoutingActionType` — planned action type: `plan_only`, `move_to_approved`, `move_to_quarantine`, `move_to_rejected`, `mark_delete_eligible`, `none`. All actions are planned-only at this stage; no real file movement occurs.
+- `RoutingReason` — individual reason for a routing decision with code, message, severity, source (`quality_grade`, `quality_finding`, `policy_rule`), and safe metadata.
+- `RoutingPolicy` — versioned policy with name, version, description, `allow_delete_eligible` (default false), `heuristic_warnings_route_to_review_or_quarantine` (default true), `objective_failures_route_to_rejected` (default true), and safe metadata.
+- `RoutingDecision` — structured decision for a single item: item_id, outcome, action_type, reasons, warnings, errors, confidence, policy, and safe metadata.
+- `RoutingPlan` — aggregate plan with plan_id, decisions, planned_changes, warnings, errors, and safe metadata.
+
+`RoutingDecisionService` provides service-level routing evaluation and planning. It accepts `QualityResult` objects and returns `RoutingDecision` or `FluxResult` with `PlannedChange` objects. It does not access the network, move files, delete files, create files, or know about `slskd`.
+
+Routing decision logic:
+
+- `QualityGrade` excellent → `approved`, action `plan_only`.
+- `QualityGrade` medium with no findings → `approved`, action `plan_only`.
+- `QualityGrade` medium with heuristic warnings → `review` (per policy), action `plan_only`.
+- `QualityGrade` medium with objective failure → `review`, action `plan_only`.
+- `QualityGrade` bad with objective failure → `rejected` (per policy), or `delete_eligible` only if `allow_delete_eligible` is true in the policy. Action is always `plan_only`.
+- `QualityGrade` bad with only heuristic warnings → `quarantine`, action `plan_only`. Heuristic warnings never generate `delete_eligible`.
+- `QualityGrade` unknown → `review`, action `plan_only`.
+
+Heuristic warnings must never cause `delete_eligible` outcome. Objective failures can inform `rejected` or `delete_eligible` future actions, but only through explicit policy configuration. All routing decisions are planned-only; no real file movement, deletion, or quarantine occurs in this commit.
+
+The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (planned decision). `CandidateScoringService` does not import `RoutingDecisionService`. `QualityService` does not execute `RoutingDecisionService` automatically. `RoutingDecisionService` consumes `QualityResult` but does not alter it.
+
 ## Quality Analysis And Routing (Future)
 
-Post-download quality analysis and routing will be separate layers from pre-download scoring:
+Post-download quality analysis and routing will continue to evolve as separate layers from pre-download scoring:
 
 - `QualityResult` — structured result from audio file inspection (ffmpeg, transcode analysis, spectrogram heuristics, decode health, clipping, low-pass detection).
 - `QualityFinding` — individual observations such as spectral cutoffs, codec artifacts, or declared-vs-actual mismatches.
@@ -145,6 +174,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `QualityService` owns post-download quality evaluation and summarization. It accepts structured fake data (item_id, optional relative_path, grade, findings, profile) and returns `FluxResult` with steps, warnings, errors, and logical quality artifacts. It does not download files, create files, access the network, read audio, use ffmpeg, perform transcode analysis, call providers, or know about `slskd`. It does not decide routing, quarantine, rejection, or deletion. Quality analysis is inherently contracts-only at this stage; real audio inspection will come in a separate future layer.
 
+`RoutingDecisionService` owns post-download routing decision planning. It accepts `QualityResult` objects and optional `RoutingPolicy`, returns `RoutingDecision` or `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, move files, delete files, call providers, or know about `slskd`. It does not execute real routing actions; all decisions are planned-only. Real execution will come in a separate future layer with explicit apply mode and safety checks.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
@@ -174,6 +205,8 @@ Download planning CLI commands are adapters over `DownloadPlanningService`: `dow
 Transfer planning CLI commands are adapters over `TransferPlanningService`: `transfer plan fake track` and `transfer plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest`, call `DownloadPlanningService` to get a `DownloadPlan`, then call `TransferPlanningService` to get a `QueuePlan`, and render the returned `FluxResult`. The CLI does not implement planning logic, transfer execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
 
 Quality CLI commands are adapters over `QualityService`: `quality fake excellent`, `quality fake medium`, `quality fake bad`, and `quality fake unknown` simulate post-download quality results with fake data, call `QualityService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement quality analysis logic, read audio files, or perform real inspection. All quality commands are contracts-only and have no `--apply` mode.
+
+Routing CLI commands are adapters over `RoutingDecisionService`: `routing fake excellent`, `routing fake medium`, `routing fake bad-objective`, `routing fake bad-heuristic`, and `routing fake unknown` simulate post-download routing decisions from fake quality results, call `RoutingDecisionService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement routing logic, move files, delete files, or perform real routing. All routing commands are planned-only and have no `--apply` mode.
 
 ## Future Controllers
 

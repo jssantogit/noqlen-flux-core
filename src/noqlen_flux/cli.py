@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, SearchService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SearchService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -177,6 +177,14 @@ def build_parser() -> argparse.ArgumentParser:
     quality_fake.add_argument("grade", choices=["excellent", "medium", "bad", "unknown"], help="Fake quality grade to simulate")
     quality_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
     quality_fake.set_defaults(func=run_quality_fake)
+
+    routing = subparsers.add_parser("routing", help="Plan post-download routing decisions (planned-only, no execution)")
+    routing_subparsers = routing.add_subparsers(dest="routing_command")
+
+    routing_fake = routing_subparsers.add_parser("fake", help="Route a fake quality result through routing policy")
+    routing_fake.add_argument("scenario", choices=["excellent", "medium", "bad-objective", "bad-heuristic", "unknown"], help="Routing scenario to simulate")
+    routing_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
+    routing_fake.set_defaults(func=run_routing_fake)
 
     return parser
 
@@ -418,6 +426,76 @@ def run_quality_fake(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_routing_fake(args: argparse.Namespace) -> int:
+    from noqlen_flux.quality import QualityFinding, QualityFindingKind, QualityFindingSeverity, QualityGrade, QualityResult
+
+    grade = {
+        "excellent": QualityGrade.EXCELLENT,
+        "medium": QualityGrade.MEDIUM,
+        "bad-objective": QualityGrade.BAD,
+        "bad-heuristic": QualityGrade.BAD,
+        "unknown": QualityGrade.UNKNOWN,
+    }[args.scenario]
+
+    findings: list[dict[str, Any]] = []
+    if args.scenario == "bad-objective":
+        findings = [
+            {
+                "code": "decode-fail",
+                "message": "File fails decode validation.",
+                "kind": "objective_failure",
+                "severity": "error",
+            }
+        ]
+    elif args.scenario == "bad-heuristic":
+        findings = [
+            {
+                "code": "low-pass-suspicion",
+                "message": "Low-pass filter suggests transcode.",
+                "kind": "heuristic_warning",
+                "severity": "warning",
+            }
+        ]
+    elif args.scenario == "medium":
+        findings = [
+            {
+                "code": "clipping-suspicion",
+                "message": "Possible clipping detected.",
+                "kind": "heuristic_warning",
+                "severity": "warning",
+            }
+        ]
+
+    quality_result = QualityService().evaluate_fake_quality(
+        item_id=args.item_id,
+        grade=grade.value,
+        findings=findings,
+    )
+    qr = QualityResult(
+        item_id=args.item_id,
+        grade=grade,
+        objective_failures=[
+            QualityFinding(
+                code="decode-fail",
+                message="File fails decode validation.",
+                kind=QualityFindingKind.OBJECTIVE_FAILURE,
+                severity=QualityFindingSeverity.ERROR,
+            )
+        ] if args.scenario == "bad-objective" else [],
+        heuristic_warnings=[
+            QualityFinding(
+                code="low-pass-suspicion",
+                message="Low-pass filter suggests transcode.",
+                kind=QualityFindingKind.HEURISTIC_WARNING,
+                severity=QualityFindingSeverity.WARNING,
+            )
+        ] if args.scenario == "bad-heuristic" else [],
+    )
+    result = RoutingDecisionService().plan_routing([qr])
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _resolve_provider(kind: str):
     if kind == "fake":
         return FakeSearchProvider(
@@ -488,6 +566,21 @@ def _render_result(result: FluxResult) -> str:
     confidence = result.summary.get("confidence")
     if confidence is not None:
         lines.append(f"confidence: {confidence}")
+    decision_count = result.summary.get("decision_count")
+    if decision_count is not None:
+        lines.append(f"decisions: {decision_count}")
+    approved_count = result.summary.get("approved_count")
+    if approved_count is not None:
+        lines.append(f"approved: {approved_count}")
+    quarantine_count = result.summary.get("quarantine_count")
+    if quarantine_count is not None:
+        lines.append(f"quarantine: {quarantine_count}")
+    rejected_count = result.summary.get("rejected_count")
+    if rejected_count is not None:
+        lines.append(f"rejected: {rejected_count}")
+    review_count = result.summary.get("review_count")
+    if review_count is not None:
+        lines.append(f"review: {review_count}")
     return "\n".join(lines)
 
 

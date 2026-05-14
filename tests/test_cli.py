@@ -259,3 +259,43 @@ def test_quality_fake_custom_item_id_works(capsys) -> None:
     output = capsys.readouterr().out
     assert "quality: success" in output
     assert "grade: excellent" in output
+
+
+def test_routing_fake_excellent_works(capsys) -> None:
+    assert main(["routing", "fake", "excellent"]) == 0
+
+    output = capsys.readouterr().out
+    assert "routing: success" in output
+    assert "approved: 1" in output
+
+
+def test_routing_fake_medium_works(capsys) -> None:
+    assert main(["routing", "fake", "medium"]) == 0
+
+    output = capsys.readouterr().out
+    assert "routing: success" in output
+    assert "approved: 1" in output
+
+
+def test_routing_fake_bad_objective_works(capsys) -> None:
+    assert main(["routing", "fake", "bad-objective"]) == 0
+
+    output = capsys.readouterr().out
+    assert "routing: warning" in output
+    assert "rejected: 1" in output
+
+
+def test_routing_fake_bad_heuristic_works(capsys) -> None:
+    assert main(["routing", "fake", "bad-heuristic"]) == 0
+
+    output = capsys.readouterr().out
+    assert "routing: warning" in output
+    assert "quarantine: 1" in output
+
+
+def test_routing_fake_unknown_works(capsys) -> None:
+    assert main(["routing", "fake", "unknown"]) == 0
+
+    output = capsys.readouterr().out
+    assert "routing: warning" in output
+    assert "review: 1" in output
