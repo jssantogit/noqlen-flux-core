@@ -1,17 +1,17 @@
 import pytest
 
+from noqlen_flux.downloads import DownloadRequest
 from noqlen_flux.providers.status import ProviderAvailability, ProviderKind
 from noqlen_flux.search import (
     CandidateFile,
     DownloadArtifact,
-    DownloadRequest,
     ProviderHealth,
     SearchCandidate,
     SearchKind,
     SearchProviderResult,
     SearchQuery,
-    TransferStatus,
 )
+from noqlen_flux.transfers import TransferState, TransferStatus
 
 
 def test_search_query_track_valid() -> None:
@@ -86,13 +86,30 @@ def test_provider_health_basic() -> None:
     assert health.to_dict()["status_message"] == "ready"
 
 
-def test_future_download_placeholders_do_not_execute_logic() -> None:
-    candidate_file = CandidateFile(filename="Example Track.flac")
-
-    request = DownloadRequest(provider="fake", candidate_id="candidate-1", files=[candidate_file])
-    status = TransferStatus(provider="fake", transfer_id="transfer-1", state="planned")
+def test_download_request_and_transfer_status_are_canonical() -> None:
+    request = DownloadRequest(
+        request_id="req-1",
+        intent="track",
+        query="test",
+        candidate_id="candidate-1",
+        candidate_files=[{"filename": "Example Track.flac"}],
+    )
+    status = TransferStatus(
+        transfer_id="transfer-1",
+        queue_item_id="qi-1",
+        state=TransferState.PLANNED,
+    )
     artifact = DownloadArtifact(provider="fake", candidate_id="candidate-1", artifact_id="artifact-1")
 
     assert request.to_dict()["candidate_id"] == "candidate-1"
     assert status.to_dict()["state"] == "planned"
     assert artifact.to_dict()["artifact_id"] == "artifact-1"
+
+
+def test_search_module_does_not_export_download_request_or_transfer_status() -> None:
+    import noqlen_flux.search as search_module
+
+    assert "DownloadRequest" not in search_module.__all__
+    assert "TransferStatus" not in search_module.__all__
+    assert not hasattr(search_module, "DownloadRequest")
+    assert not hasattr(search_module, "TransferStatus")

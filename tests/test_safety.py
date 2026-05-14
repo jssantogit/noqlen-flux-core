@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from noqlen_flux.safety import PathSafetyError, ensure_not_protected, ensure_within_workspace, is_within_path
+from noqlen_flux.safety import (
+    PathSafetyError,
+    ensure_not_protected,
+    ensure_within_workspace,
+    is_within_path,
+    validate_safe_relative_path,
+)
 
 
 def test_path_inside_workspace_is_allowed(tmp_path: Path) -> None:
@@ -44,3 +50,57 @@ def test_protected_root_is_blocked(tmp_path: Path) -> None:
         ensure_not_protected(target, (protected,))
 
     assert exc.value.code == "protected-root"
+
+
+def test_validate_safe_relative_path_returns_none_for_none() -> None:
+    assert validate_safe_relative_path(None) is None
+
+
+def test_validate_safe_relative_path_accepts_safe_path() -> None:
+    result = validate_safe_relative_path("approved/item-1.flac")
+    assert result == "approved/item-1.flac"
+
+
+def test_validate_safe_relative_path_blocks_empty() -> None:
+    with pytest.raises(ValueError, match="Empty path"):
+        validate_safe_relative_path("")
+
+
+def test_validate_safe_relative_path_blocks_absolute() -> None:
+    with pytest.raises(ValueError, match="Absolute paths"):
+        validate_safe_relative_path("/etc/passwd")
+
+
+def test_validate_safe_relative_path_blocks_traversal() -> None:
+    with pytest.raises(ValueError, match="Path traversal marker"):
+        validate_safe_relative_path("../../../etc/passwd")
+
+
+def test_validate_safe_relative_path_blocks_tilde() -> None:
+    with pytest.raises(ValueError, match="Path traversal marker"):
+        validate_safe_relative_path("~/escape.txt")
+
+
+def test_validate_safe_relative_path_blocks_dollar() -> None:
+    with pytest.raises(ValueError, match="Path traversal marker"):
+        validate_safe_relative_path("$HOME/escape.txt")
+
+
+def test_validate_safe_relative_path_blocks_brace() -> None:
+    with pytest.raises(ValueError, match="Path traversal marker"):
+        validate_safe_relative_path("{var}/escape.txt")
+
+
+def test_validate_safe_relative_path_blocks_parent_traversal() -> None:
+    with pytest.raises(ValueError, match="Path traversal marker"):
+        validate_safe_relative_path("foo/../bar")
+
+
+def test_validate_safe_relative_path_normalizes_backslashes() -> None:
+    result = validate_safe_relative_path("approved\\item-1.flac")
+    assert result == "approved/item-1.flac"
+
+
+def test_validate_safe_relative_path_custom_field_name() -> None:
+    with pytest.raises(ValueError, match="relative_path: Empty path"):
+        validate_safe_relative_path("", field_name="relative_path")

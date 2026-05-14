@@ -112,36 +112,12 @@ from .providers.status import ProviderHealth
 __all__ = [
     "CandidateFile",
     "DownloadArtifact",
-    "DownloadRequest",
     "ProviderHealth",
     "SearchCandidate",
     "SearchKind",
     "SearchProviderResult",
     "SearchQuery",
-    "TransferStatus",
 ]
-
-
-@dataclass(slots=True, frozen=True)
-class DownloadRequest:
-    provider: str
-    candidate_id: str
-    files: list[CandidateFile] = field(default_factory=list)
-    metadata: SafeMetadata = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return _clean(asdict(self))
-
-
-@dataclass(slots=True, frozen=True)
-class TransferStatus:
-    provider: str
-    transfer_id: str
-    state: str
-    metadata: SafeMetadata = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return _clean(asdict(self))
 
 
 @dataclass(slots=True, frozen=True)

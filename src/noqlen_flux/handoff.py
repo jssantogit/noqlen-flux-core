@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 from .results import _clean
+from .safety import validate_safe_relative_path as validate_relative_path
 
 SafeMetadata = dict[str, Any]
 
@@ -32,8 +33,6 @@ class HandoffItemStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
-_TRAVERSAL_MARKERS = ("..", "~", "$", "{", "}")
-
 _FORBIDDEN_FIELDS = (
     "full_lyrics",
     "lyrics",
@@ -50,21 +49,6 @@ _FORBIDDEN_FIELDS = (
 )
 
 
-def _is_safe_relative_path(value: str) -> bool:
-    if not value:
-        return False
-    if value.startswith("/") or value.startswith("\\"):
-        return False
-    for marker in _TRAVERSAL_MARKERS:
-        if marker in value:
-            return False
-    normalized = value.replace("\\", "/")
-    parts = normalized.split("/")
-    if ".." in parts:
-        return False
-    return True
-
-
 def _contains_forbidden_field(data: dict[str, Any]) -> tuple[bool, str | None]:
     for key, value in data.items():
         normalized_key = key.lower().replace("_", "-")
@@ -77,23 +61,6 @@ def _contains_forbidden_field(data: dict[str, Any]) -> tuple[bool, str | None]:
             if found:
                 return True, found_key
     return False, None
-
-
-def validate_relative_path(value: str | None, *, field_name: str = "path") -> str | None:
-    if value is None:
-        return None
-    if not value:
-        raise ValueError(f"{field_name}: Empty path.")
-    if value.startswith("/") or value.startswith("\\"):
-        raise ValueError(f"{field_name}: Absolute paths are not allowed.")
-    for marker in _TRAVERSAL_MARKERS:
-        if marker in value:
-            raise ValueError(f"{field_name}: Path traversal marker '{marker}' is not allowed.")
-    normalized = value.replace("\\", "/")
-    parts = normalized.split("/")
-    if ".." in parts:
-        raise ValueError(f"{field_name}: Parent directory traversal is not allowed.")
-    return normalized
 
 
 def validate_safe_metadata(data: SafeMetadata) -> SafeMetadata:

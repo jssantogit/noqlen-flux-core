@@ -5,37 +5,9 @@ from enum import StrEnum
 from typing import Any
 
 from .results import _clean
+from .safety import validate_safe_relative_path as validate_relative_path
 
 SafeMetadata = dict[str, Any]
-
-_TRAVERSAL_MARKERS = ("..", "~", "$", "{", "}")
-
-
-def _is_safe_relative_path(value: str | None) -> tuple[bool, str]:
-    if value is None:
-        return True, ""
-    if not value:
-        return False, "Empty path."
-    if value.startswith("/") or value.startswith("\\"):
-        return False, "Absolute paths are not allowed."
-    for marker in _TRAVERSAL_MARKERS:
-        if marker in value:
-            return False, f"Path traversal marker '{marker}' is not allowed."
-    normalized = value.replace("\\", "/")
-    parts = normalized.split("/")
-    if any(p in (".", "..", "") for p in parts if p):
-        if ".." in parts:
-            return False, "Parent directory traversal is not allowed."
-    return True, ""
-
-
-def validate_relative_path(value: str | None, *, field_name: str = "path") -> str | None:
-    if value is None:
-        return None
-    safe, reason = _is_safe_relative_path(value)
-    if not safe:
-        raise ValueError(f"{field_name}: {reason}")
-    return value.replace("\\", "/")
 
 
 class StagingArea(StrEnum):

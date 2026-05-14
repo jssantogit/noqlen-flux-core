@@ -23,10 +23,9 @@ from noqlen_flux.handoff import (
     HandoffValidationIssue,
     HandoffValidationResult,
     _FORBIDDEN_FIELDS,
-    _TRAVERSAL_MARKERS,
-    _is_safe_relative_path,
     validate_relative_path,
 )
+from noqlen_flux.safety import _TRAVERSAL_MARKERS, is_safe_relative_path
 from noqlen_flux.results import AppliedChange, Artifact, FluxError, FluxResult, FluxWarning, PlannedChange, Severity, Status
 from noqlen_flux.safety import PathSafetyError, ensure_not_protected, ensure_within_workspace, normalize_path, safe_workspace_root
 from noqlen_flux.services.base import FluxService
@@ -381,7 +380,7 @@ class HandoffManifestService(FluxService):
                 )
             )
 
-        if not _is_safe_relative_path(item.path.relative_path):
+        if not is_safe_relative_path(item.path.relative_path):
             issues.append(
                 HandoffValidationIssue(
                     code="unsafe-path",

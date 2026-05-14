@@ -3,12 +3,46 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+_TRAVERSAL_MARKERS = ("..", "~", "$", "{", "}")
+
 
 @dataclass(slots=True, frozen=True)
 class PathSafetyError(Exception):
     code: str
     message: str
     context: dict[str, str] = field(default_factory=dict)
+
+
+def validate_safe_relative_path(value: str | None, *, field_name: str = "path") -> str | None:
+    if value is None:
+        return None
+    if not value:
+        raise ValueError(f"{field_name}: Empty path.")
+    if value.startswith("/") or value.startswith("\\"):
+        raise ValueError(f"{field_name}: Absolute paths are not allowed.")
+    for marker in _TRAVERSAL_MARKERS:
+        if marker in value:
+            raise ValueError(f"{field_name}: Path traversal marker '{marker}' is not allowed.")
+    normalized = value.replace("\\", "/")
+    parts = normalized.split("/")
+    if ".." in parts:
+        raise ValueError(f"{field_name}: Parent directory traversal is not allowed.")
+    return normalized
+
+
+def is_safe_relative_path(value: str) -> bool:
+    if not value:
+        return False
+    if value.startswith("/") or value.startswith("\\"):
+        return False
+    for marker in _TRAVERSAL_MARKERS:
+        if marker in value:
+            return False
+    normalized = value.replace("\\", "/")
+    parts = normalized.split("/")
+    if ".." in parts:
+        return False
+    return True
 
 
 def normalize_path(path: str | Path) -> Path:
