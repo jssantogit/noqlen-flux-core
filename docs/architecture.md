@@ -85,6 +85,28 @@ A future `slskd` adapter and a future `NativeSoulseekProvider` must both impleme
 
 `TransferPlanningService` does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer with a provider adapter.
 
+## Quality Analysis Foundation
+
+Post-download quality analysis is a separate core domain from pre-download scoring and download/transfer planning. This commit introduces the contracts and fake simulation layer for future audio file inspection.
+
+Flux owns these quality models:
+
+- `QualityGrade` — post-download quality classification: `excellent`, `medium`, `bad`, `unknown`. This is NOT `CandidateRisk`. `CandidateRisk` is a pre-download risk signal; `QualityGrade` represents analysis of the actual downloaded file.
+- `QualityFindingSeverity` — severity of individual findings: `info`, `warning`, `error`.
+- `QualityFindingKind` — type of finding: `objective_failure`, `heuristic_warning`, `diagnostic`, `metadata_signal`, `unknown`.
+- `QualityFinding` — individual observation with code, message, kind, severity, optional confidence, and safe metadata.
+- `QualityProfile` — versioned calibration profile with name, version, description, thresholds, and safe metadata. MusicLab will calibrate thresholds before any real provider or audio analysis is active.
+- `QualityResult` — structured result from file inspection: item_id, optional relative_path, grade, findings, objective_failures, heuristic_warnings, diagnostics, confidence, profile, warnings, errors, and safe metadata.
+- `QualitySummary` — aggregate counts across multiple results: total_items, excellent_count, medium_count, bad_count, unknown_count, warning_count, error_count.
+
+`QualityService` provides service-level fake quality evaluation and summarization. It accepts structured fake data and returns `FluxResult` with steps, warnings, errors, and logical quality artifacts. It does not access the network, download files, create files, read audio, use ffmpeg, perform transcode analysis, or know about `slskd`.
+
+Quality analysis does not perform routing, quarantine, rejection, or deletion. `QualityResult` does not contain `RoutingDecision`. A future routing layer will combine `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration to produce decisions: `approved` / `quarantine` / `rejected` / `delete_eligible`.
+
+Heuristic warnings (such as low-pass suspicion, clipping suspicion, or transcode suspicion) must not cause destructive file operations. They are informational until MusicLab calibration establishes strong thresholds. Objective failures can inform future routing but do not execute delete in this commit.
+
+The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (combined decision). `CandidateScoringService` does not import `QualityService`. `QualityService` does not import `CandidateScoringService`.
+
 ## Quality Analysis And Routing (Future)
 
 Post-download quality analysis and routing will be separate layers from pre-download scoring:
@@ -121,6 +143,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `ProviderService` owns provider inspection, health checks, and capability validation. It accepts any `BaseProvider`, calls `health()` and `capabilities()`, and returns `FluxResult` with structured steps, warnings, errors, and logical artifacts. It does not access the network, download files, create files, or know about `slskd`.
 
+`QualityService` owns post-download quality evaluation and summarization. It accepts structured fake data (item_id, optional relative_path, grade, findings, profile) and returns `FluxResult` with steps, warnings, errors, and logical quality artifacts. It does not download files, create files, access the network, read audio, use ffmpeg, perform transcode analysis, call providers, or know about `slskd`. It does not decide routing, quarantine, rejection, or deletion. Quality analysis is inherently contracts-only at this stage; real audio inspection will come in a separate future layer.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
@@ -148,6 +172,8 @@ Search CLI commands are adapters over `SearchService`: `search fake track` and `
 Download planning CLI commands are adapters over `DownloadPlanningService`: `download plan fake track` and `download plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest` with constraints, call `DownloadPlanningService`, and render the returned `FluxResult`. The CLI does not implement planning logic, download execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
 
 Transfer planning CLI commands are adapters over `TransferPlanningService`: `transfer plan fake track` and `transfer plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest`, call `DownloadPlanningService` to get a `DownloadPlan`, then call `TransferPlanningService` to get a `QueuePlan`, and render the returned `FluxResult`. The CLI does not implement planning logic, transfer execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
+
+Quality CLI commands are adapters over `QualityService`: `quality fake excellent`, `quality fake medium`, `quality fake bad`, and `quality fake unknown` simulate post-download quality results with fake data, call `QualityService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement quality analysis logic, read audio files, or perform real inspection. All quality commands are contracts-only and have no `--apply` mode.
 
 ## Future Controllers
 

@@ -10,6 +10,7 @@ def test_help_exits_successfully(capsys) -> None:
     output = capsys.readouterr().out
     assert "noqlen-flux" in output
     assert "doctor" in output
+    assert "quality" in output
 
 
 def test_doctor_is_safe_stub(capsys) -> None:
@@ -218,3 +219,43 @@ def test_transfer_plan_fake_album_with_score_works(capsys) -> None:
 
     output = capsys.readouterr().out
     assert "transfer-planning: success" in output
+
+
+def test_quality_fake_excellent_works(capsys) -> None:
+    assert main(["quality", "fake", "excellent"]) == 0
+
+    output = capsys.readouterr().out
+    assert "quality: success" in output
+    assert "grade: excellent" in output
+
+
+def test_quality_fake_medium_works(capsys) -> None:
+    assert main(["quality", "fake", "medium"]) == 0
+
+    output = capsys.readouterr().out
+    assert "quality: success" in output
+    assert "grade: medium" in output
+
+
+def test_quality_fake_bad_works(capsys) -> None:
+    assert main(["quality", "fake", "bad"]) == 0
+
+    output = capsys.readouterr().out
+    assert "quality: warning" in output
+    assert "grade: bad" in output
+
+
+def test_quality_fake_unknown_works(capsys) -> None:
+    assert main(["quality", "fake", "unknown"]) == 0
+
+    output = capsys.readouterr().out
+    assert "quality: success" in output
+    assert "grade: unknown" in output
+
+
+def test_quality_fake_custom_item_id_works(capsys) -> None:
+    assert main(["quality", "fake", "excellent", "--item-id", "custom-item-1"]) == 0
+
+    output = capsys.readouterr().out
+    assert "quality: success" in output
+    assert "grade: excellent" in output

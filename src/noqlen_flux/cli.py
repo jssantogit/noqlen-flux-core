@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, ReportService, SearchService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, SearchService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -169,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
     provider_health = provider_subparsers.add_parser("health", help="Check provider health status")
     provider_health.add_argument("provider_kind", choices=["fake", "fake-transfer"], help="Provider to check")
     provider_health.set_defaults(func=run_provider_health)
+
+    quality = subparsers.add_parser("quality", help="Inspect post-download quality (contracts-only, no real audio analysis)")
+    quality_subparsers = quality.add_subparsers(dest="quality_command")
+
+    quality_fake = quality_subparsers.add_parser("fake", help="Generate a fake quality result for testing")
+    quality_fake.add_argument("grade", choices=["excellent", "medium", "bad", "unknown"], help="Fake quality grade to simulate")
+    quality_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
+    quality_fake.set_defaults(func=run_quality_fake)
 
     return parser
 
@@ -401,6 +409,15 @@ def run_provider_health(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_quality_fake(args: argparse.Namespace) -> int:
+    result = QualityService().evaluate_fake_quality(
+        item_id=args.item_id,
+        grade=args.grade,
+    )
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _resolve_provider(kind: str):
     if kind == "fake":
         return FakeSearchProvider(
@@ -465,6 +482,12 @@ def _render_result(result: FluxResult) -> str:
     state = result.summary.get("state")
     if state is not None:
         lines.append(f"state: {state}")
+    grade = result.summary.get("grade")
+    if grade is not None:
+        lines.append(f"grade: {grade}")
+    confidence = result.summary.get("confidence")
+    if confidence is not None:
+        lines.append(f"confidence: {confidence}")
     return "\n".join(lines)
 
 

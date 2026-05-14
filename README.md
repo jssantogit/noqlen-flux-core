@@ -25,6 +25,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Generic `TransferProvider` contract for future provider adapters (slskd, NativeSoulseekProvider).
 - Provider health, capabilities, and status models with a generic `BaseProvider` interface.
 - `ProviderService` for inspecting provider health and validating capabilities without network access.
+- Post-download quality result contracts and fake simulation service (`QualityGrade`, `QualityFinding`, `QualityResult`, `QualityProfile`, `QualitySummary`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -179,3 +180,27 @@ noqlen-flux provider health fake
 ```
 
 The fake providers declare their capabilities and return consistent `ProviderHealth` with explicit availability states (`available`, `degraded`, `unavailable`). There is no real provider yet. `slskd` is a future adapter that must map its backend status into Flux `ProviderHealth`. A future `NativeSoulseekProvider` will implement the same contract.
+
+## Quality Result Foundation
+
+Post-download quality analysis is a separate Flux domain from pre-download scoring. `QualityGrade` (`excellent`, `medium`, `bad`, `unknown`) represents analysis of the actual downloaded file, while `CandidateRisk` (`low`, `medium`, `high`) is a pre-download risk signal. They must remain separate.
+
+Simulate a fake excellent quality result:
+
+```bash
+noqlen-flux quality fake excellent
+```
+
+Simulate a fake medium quality result:
+
+```bash
+noqlen-flux quality fake medium
+```
+
+Simulate a fake bad quality result:
+
+```bash
+noqlen-flux quality fake bad
+```
+
+This is not real audio quality analysis. Flux still has no ffmpeg, transcode detection, spectrogram analysis, decode validation, clipping detection, or low-pass analysis. Real audio inspection will come in a separate future commit after MusicLab calibration establishes thresholds.

@@ -117,6 +117,30 @@ The `TransferProvider` contract is generic and provider-neutral. A future `Slskd
 
 No test uses real network access or a real music library. All tests use fake providers, fake candidates, temporary directories, or controlled fixtures.
 
+## Quality Analysis
+
+Quality analysis is currently contracts-only. `QualityService` does not perform real audio analysis, use ffmpeg, perform transcode detection, measure loudness, detect clipping, or run low-pass analysis. It accepts structured fake data and returns simulated `QualityResult` objects.
+
+Future real audio analysis must operate inside an isolated workspace. It must not touch a real music library, personal music folders, or download folders. All file operations must be confined to the Flux workspace root with path containment and symlink protection.
+
+`QualityGrade` is a post-download quality classification (`excellent`, `medium`, `bad`, `unknown`). It is NOT `CandidateRisk`. `CandidateRisk` is a pre-download risk signal. The two must remain separate: scoring does not import quality, and quality does not import scoring.
+
+Heuristic warnings such as low-pass suspicion, clipping suspicion, or transcode suspicion must remain informational until MusicLab calibration establishes strong thresholds. They must not cause file deletion, movement, quarantine, or rejection by themselves.
+
+Objective failures can inform future routing decisions but do not execute delete, quarantine, or rejection in this commit. `QualityResult` does not contain `RoutingDecision`. A future routing layer will combine `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration.
+
+Automated quality tests must use fake data, temporary directories, or controlled fixtures only. They must not use real audio files, network access, ffmpeg, transcode tools, or personal filesystem paths.
+
+Quality contracts must not expose:
+
+- Complete lyrics.
+- Raw audio fingerprints.
+- Raw provider payloads.
+- Secrets, tokens, or credentials.
+- Unnecessary personal absolute paths.
+
+`QualityProfile` is versioned so MusicLab can calibrate thresholds before any real provider or audio analysis is active. The default profile declares `stage: post-download` and `status: contracts-only`.
+
 ## Reports
 
 Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.
