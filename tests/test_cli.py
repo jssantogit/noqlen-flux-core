@@ -63,6 +63,22 @@ def test_report_demo_apply_works(tmp_path, capsys) -> None:
     assert len(list((workspace / "reports").glob("*.txt"))) == 1
 
 
+def test_search_fake_track_works(capsys) -> None:
+    assert main(["search", "fake", "track", "--artist", "Example Artist", "--title", "Example Track"]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "Provider fake returned 1 candidate(s)" in output
+
+
+def test_search_fake_album_works(capsys) -> None:
+    assert main(["search", "fake", "album", "--artist", "Example Artist", "--album", "Example Album"]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "Provider fake returned 1 candidate(s)" in output
+
+
 def test_musiclab_inspect_works(tmp_path, capsys) -> None:
     workspace = tmp_path / "flux-workspace"
 

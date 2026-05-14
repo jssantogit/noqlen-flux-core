@@ -4,6 +4,7 @@ from .base import FluxService
 from .doctor import DoctorService
 from .musiclab import MusicLabService
 from .reports import ReportService
+from .search import SearchService
 from .workspace import WorkspaceService
 
-__all__ = ["DoctorService", "FluxService", "MusicLabService", "ReportService", "WorkspaceService"]
+__all__ = ["DoctorService", "FluxService", "MusicLabService", "ReportService", "SearchService", "WorkspaceService"]

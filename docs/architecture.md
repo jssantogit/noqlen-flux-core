@@ -10,6 +10,22 @@ Future UI, controller, bridge, or mobile layers must not contain heavy workflow 
 
 The bootstrap repository intentionally has no network integration, `slskd` integration, database, auto-import, watch list, or real cleanup behavior.
 
+## Search Domain Models
+
+Flux owns generic search models in the core domain: `SearchKind`, `SearchQuery`, `CandidateFile`, `SearchCandidate`, `SearchProviderResult`, and `ProviderHealth`. These names describe Flux concepts, not internal names from any external provider.
+
+Locked files are represented at candidate-file level before any download workflow exists. This lets future planning and UI layers expose lock state without downloading or mutating files.
+
+Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `DownloadArtifact` define the future provider/core boundary without implementing download, queues, transfers, or artifacts on disk.
+
+## Provider Boundary
+
+Provider adapters implement the generic `SearchProvider` contract: `name`, `search(query)`, and `health()`. Core services depend on this contract only. They must not import `slskd`, native Soulseek code, terminal UI code, or provider-specific payloads.
+
+The in-memory fake provider is the first adapter. It exists to test search flow offline, including warnings, controlled errors, timeouts, locked files, and album folders with multiple files. It performs no network calls and does not touch the filesystem.
+
+A future `slskd` adapter should live under `providers/slskd` or an equivalent isolated module and translate external data into Flux-owned models. A future `NativeSoulseekProvider` should be able to implement the same contract and replace `slskd` without deep core changes.
+
 ## Result Contracts
 
 Flux services return structured `FluxResult` objects composed of statuses, steps, warnings, errors, artifacts, planned changes, applied changes, summaries, and timestamps. These contracts are serializable with safe `to_dict()` and `to_json()` methods so future controllers can consume data without scraping terminal output.
@@ -23,6 +39,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 `ReportService` owns report preview and writing. It builds JSON or text reports from `FluxResult` objects, returns planned or applied changes, and exposes report files as service artifacts. Report generation belongs to core services, not to the CLI.
 
 `MusicLabService` owns the isolated calibration lab under `workspace/musiclab`. It validates the lab layout, plans or creates MusicLab directories, creates safe sessions, and writes only controlled fake fixtures. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, and `Artifact` objects; it does not print, parse CLI arguments, access providers, create audio, call the network, or touch a real music library.
+
+`SearchService` owns the service-first search flow. It accepts a `SearchQuery` and any `SearchProvider`, calls the provider contract, and returns a `FluxResult` with steps, warnings, errors, summary data, and logical candidate artifacts. It does not download, create files, score quality, access the network, or know whether the provider is fake, `slskd`, or native Soulseek.
 
 ## MusicLab
 
@@ -45,6 +63,8 @@ Workspace CLI commands are adapters over `WorkspaceService`: `workspace inspect 
 Report CLI commands are adapters over `ReportService`: `report demo --workspace PATH --format json --dry-run` previews a report artifact, while `--apply` writes it inside `PATH/reports`. The CLI does not assemble report content or bypass service safety checks.
 
 MusicLab CLI commands are adapters over `MusicLabService`: `musiclab inspect`, `musiclab init`, `musiclab session create`, and `musiclab fixture create` parse arguments, call the service, render the result, and choose the process exit code. Default behavior remains dry-run unless `--apply` is explicit.
+
+Search CLI commands are adapters over `SearchService`: `search fake track` and `search fake album` build `SearchQuery` objects, instantiate only the safe in-memory fake provider, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement provider logic or download behavior.
 
 ## Future Controllers
 

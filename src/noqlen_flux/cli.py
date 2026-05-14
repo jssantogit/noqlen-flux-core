@@ -4,9 +4,11 @@ import argparse
 
 from . import __version__
 from .config import config_from_env
+from .providers.fake import FakeSearchProvider
 from .reports import ReportFormat
 from .results import FluxResult, Status
-from .services import DoctorService, MusicLabService, ReportService, WorkspaceService
+from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
+from .services import DoctorService, MusicLabService, ReportService, SearchService, WorkspaceService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +46,23 @@ def build_parser() -> argparse.ArgumentParser:
     report_mode.add_argument("--dry-run", action="store_true", help="Plan report writing without creating a file")
     report_mode.add_argument("--apply", action="store_true", help="Write the report inside workspace/reports")
     report_demo.set_defaults(func=run_report_demo)
+
+    search = subparsers.add_parser("search", help="Run safe provider-backed search flows")
+    search_subparsers = search.add_subparsers(dest="search_provider")
+    search_fake = search_subparsers.add_parser("fake", help="Search an in-memory fake provider")
+    search_fake_subparsers = search_fake.add_subparsers(dest="search_kind")
+
+    search_fake_track = search_fake_subparsers.add_parser("track", help="Search a fake track candidate")
+    search_fake_track.add_argument("--artist", required=True, help="Artist name")
+    search_fake_track.add_argument("--title", required=True, help="Track title")
+    search_fake_track.add_argument("--limit", type=int, help="Optional positive result limit")
+    search_fake_track.set_defaults(func=run_search_fake_track)
+
+    search_fake_album = search_fake_subparsers.add_parser("album", help="Search a fake album candidate")
+    search_fake_album.add_argument("--artist", required=True, help="Artist name")
+    search_fake_album.add_argument("--album", required=True, help="Album title")
+    search_fake_album.add_argument("--limit", type=int, help="Optional positive result limit")
+    search_fake_album.set_defaults(func=run_search_fake_album)
 
     musiclab = subparsers.add_parser("musiclab", help="Inspect or initialize isolated MusicLab calibration state")
     musiclab_subparsers = musiclab.add_subparsers(dest="musiclab_command")
@@ -117,6 +136,20 @@ def run_report_demo(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_search_fake_track(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title, limit=args.limit)
+    result = SearchService().search(query, _demo_fake_provider())
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_search_fake_album(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album, limit=args.limit)
+    result = SearchService().search(query, _demo_fake_provider())
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def run_musiclab_inspect(args: argparse.Namespace) -> int:
     result = MusicLabService().inspect_lab(config_from_env(args.workspace, dry_run=True))
     print(_render_result(result))
@@ -162,6 +195,36 @@ def _render_result(result: FluxResult) -> str:
     lines.extend(f"applied: {change.action} {change.target}" for change in result.applied_changes)
     lines.extend(f"error: {error.code}: {error.message}" for error in result.errors)
     return "\n".join(lines)
+
+
+def _demo_fake_provider() -> FakeSearchProvider:
+    return FakeSearchProvider(
+        [
+            SearchCandidate(
+                candidate_id="fake-track-example",
+                provider="fake",
+                username="fake-user",
+                directory="Example Artist/Example Track",
+                artist="Example Artist",
+                title="Example Track",
+                raw_score=1.0,
+                files=[CandidateFile(filename="Example Track.flac", extension="flac", size_bytes=12345678)],
+            ),
+            SearchCandidate(
+                candidate_id="fake-album-example",
+                provider="fake",
+                username="fake-user",
+                directory="Example Artist/Example Album",
+                artist="Example Artist",
+                album="Example Album",
+                raw_score=1.0,
+                files=[
+                    CandidateFile(filename="01 Example Album Intro.flac", extension="flac", size_bytes=1111111),
+                    CandidateFile(filename="02 Example Album Track.flac", extension="flac", size_bytes=2222222),
+                ],
+            ),
+        ]
+    )
 
 
 def _exit_code(status: Status) -> int:

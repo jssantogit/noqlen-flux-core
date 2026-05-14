@@ -18,8 +18,9 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Safe workspace inspection and initialization primitives.
 - Safe JSON and text report artifact generation from structured service results.
 - An isolated MusicLab foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration.
+- Generic search domain models, provider contracts, and an in-memory fake provider for offline search-flow tests.
 
-No operation currently performs real search, downloads, network calls, imports, cleanup, or music library writes.
+No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
 ## Safe Workspace
 
@@ -78,3 +79,21 @@ noqlen-flux musiclab session create --workspace ./flux-workspace --purpose "scor
 ```
 
 MusicLab does not implement search, `slskd`, downloads, audio inspection, ffmpeg, transcode, cleanup, handoff, network calls, or real music library writes.
+
+## Generic Search Providers
+
+Flux search is provider-based. Core services depend on generic contracts such as search queries, candidates, provider results, and provider health instead of any `slskd` model or native Soulseek implementation.
+
+Run a safe fake track search entirely in memory:
+
+```bash
+noqlen-flux search fake track --artist "Example Artist" --title "Example Track"
+```
+
+Run a safe fake album search with a multi-file candidate:
+
+```bash
+noqlen-flux search fake album --artist "Example Artist" --album "Example Album"
+```
+
+The fake provider is for tests and demonstrations only. `slskd` is not implemented yet and must remain isolated as a future external provider adapter, replaceable by a future native Soulseek provider without rewriting the core service layer.
