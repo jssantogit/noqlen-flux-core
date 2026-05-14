@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from noqlen_flux.results import Artifact, FluxResult, FluxWarning, Status
 from noqlen_flux.scoring import (
     DEFAULT_SCORING_PROFILE,
@@ -194,11 +196,18 @@ def _availability_component(candidate: SearchCandidate, profile: ScoringProfile)
     return ScoreComponent("availability", max_score, max_score, reasons=[reason])
 
 
+def _risky_term_in_text(term: str, text: str) -> bool:
+    if " " in term:
+        return term in text
+    return bool(re.search(rf"\b{re.escape(term)}\b", text))
+
+
 def _risk_penalties_component(candidate: SearchCandidate) -> ScoreComponent:
+    candidate_text = _candidate_text(candidate)
     penalties = [
         ScorePenalty("suspicious-term", f"Suspicious pre-download term found: {term}.", value, metadata={"term": term})
         for term, value in SUSPICIOUS_TERMS.items()
-        if term in _candidate_text(candidate)
+        if _risky_term_in_text(term, candidate_text)
     ]
     penalty_total = sum(penalty.value for penalty in penalties)
     return ScoreComponent("risk_penalties", -penalty_total, 0.0, penalties=penalties)

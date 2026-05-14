@@ -36,6 +36,18 @@ Scoring is explainable and calibrable. Every score should be backed by component
 
 The core remains provider-neutral. A future `slskd` provider or `NativeSoulseekProvider` must translate provider output into `SearchCandidate`; scoring must continue to depend on Flux models rather than external provider internals.
 
+## Quality Analysis And Routing (Future)
+
+Post-download quality analysis and routing will be separate layers from pre-download scoring:
+
+- `QualityResult` — structured result from audio file inspection (ffmpeg, transcode analysis, spectrogram heuristics, decode health, clipping, low-pass detection).
+- `QualityFinding` — individual observations such as spectral cutoffs, codec artifacts, or declared-vs-actual mismatches.
+- `QualityGrade` — summary classification: `excellent` / `medium` / `bad`. This is NOT `CandidateRisk`.
+- `RoutingDecision` — a separate service layer that combines `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration to produce decisions: `approved` / `quarantine` / `rejected` / `delete_eligible`.
+- `calibration_profile` — MusicLab sessions that tune scoring weights, quality heuristics, and routing thresholds against controlled fixtures before any real provider or download behavior is active.
+
+Pre-download scoring (`CandidateScore`, `CandidateRisk`) must not grow into audio quality or routing decisions. The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (combined decision).
+
 ## Result Contracts
 
 Flux services return structured `FluxResult` objects composed of statuses, steps, warnings, errors, artifacts, planned changes, applied changes, summaries, and timestamps. These contracts are serializable with safe `to_dict()` and `to_json()` methods so future controllers can consume data without scraping terminal output.
