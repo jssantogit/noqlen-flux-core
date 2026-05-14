@@ -8,6 +8,8 @@ Write-capable workflows should support dry-run and apply modes. Dry-run should b
 
 Workspace initialization follows this rule. `noqlen-flux workspace init PATH --dry-run` reports planned directory creation without writing to disk. `noqlen-flux workspace init PATH --apply` is required before Flux creates missing workspace directories.
 
+Report writing follows the same rule. `noqlen-flux report demo --workspace PATH --format json --dry-run` previews the report artifact without writing, and `--apply` is required before a file is created.
+
 ## Workspace Root
 
 The workspace root is the Flux-controlled boundary for staging and generated state. It is normalized with `pathlib` before use. Future workflows must operate inside this root unless a separate safety boundary is explicitly designed.
@@ -42,6 +44,19 @@ Future file operations must enforce path containment, symlink protection, and pa
 Path traversal attempts that resolve outside the workspace are blocked. Symlinks that resolve outside the workspace are also blocked before Flux plans or applies directory operations.
 
 Protected roots can be configured for service calls. Any target inside a protected root is rejected, and a workspace root that would contain a protected root is rejected. CLI environment support is intentionally minimal and only uses the `NOQLEN_FLUX_` prefix.
+
+## Reports
+
+Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.
+
+Report content must remain audit-safe:
+
+- No secrets or credentials.
+- No raw provider payloads.
+- No unnecessary personal absolute paths.
+- No complete lyrics.
+- No raw fingerprints.
+- No real download or music library side effects.
 
 ## Tests
 

@@ -39,3 +39,25 @@ def test_workspace_init_apply_works(tmp_path, capsys) -> None:
     assert "workspace: success" in output
     assert "Created directory: incoming" in output
     assert (workspace / "incoming").is_dir()
+
+
+def test_report_demo_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["report", "demo", "--workspace", str(workspace), "--format", "json", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "report: success" in output
+    assert "Would write report" in output
+    assert not workspace.exists()
+
+
+def test_report_demo_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["report", "demo", "--workspace", str(workspace), "--format", "text", "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "report: success" in output
+    assert "Wrote report" in output
+    assert len(list((workspace / "reports").glob("*.txt"))) == 1

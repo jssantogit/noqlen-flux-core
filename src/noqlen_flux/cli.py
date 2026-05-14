@@ -4,8 +4,9 @@ import argparse
 
 from . import __version__
 from .config import config_from_env
+from .reports import ReportFormat
 from .results import FluxResult, Status
-from .services import DoctorService, WorkspaceService
+from .services import DoctorService, ReportService, WorkspaceService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,17 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--apply", action="store_true", help="Create missing workspace directories")
     workspace_init.set_defaults(func=run_workspace_init)
 
+    report = subparsers.add_parser("report", help="Plan or write safe report artifacts")
+    report_subparsers = report.add_subparsers(dest="report_command")
+
+    report_demo = report_subparsers.add_parser("demo", help="Generate a safe demo report result")
+    report_demo.add_argument("--workspace", required=True, help="Workspace root path")
+    report_demo.add_argument("--format", choices=[item.value for item in ReportFormat], default=ReportFormat.JSON.value)
+    report_mode = report_demo.add_mutually_exclusive_group()
+    report_mode.add_argument("--dry-run", action="store_true", help="Plan report writing without creating a file")
+    report_mode.add_argument("--apply", action="store_true", help="Write the report inside workspace/reports")
+    report_demo.set_defaults(func=run_report_demo)
+
     return parser
 
 
@@ -51,6 +63,19 @@ def run_workspace_inspect(args: argparse.Namespace) -> int:
 def run_workspace_init(args: argparse.Namespace) -> int:
     dry_run = not args.apply
     result = WorkspaceService().ensure_workspace(config_from_env(args.path, dry_run=dry_run), dry_run=dry_run)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_report_demo(args: argparse.Namespace) -> int:
+    dry_run = not args.apply
+    service = ReportService()
+    config = config_from_env(args.workspace, dry_run=dry_run)
+    source = service.demo_result()
+    if dry_run:
+        result = service.preview_report(config, source, args.format)
+    else:
+        result = service.write_report(config, source, args.format)
     print(_render_result(result))
     return _exit_code(result.status)
 

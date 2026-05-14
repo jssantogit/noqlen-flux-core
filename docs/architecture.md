@@ -20,11 +20,21 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `WorkspaceService` owns workspace inspection, dry-run planning, apply-mode directory creation, and path safety enforcement. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, warnings, and errors instead of terminal output.
 
+`ReportService` owns report preview and writing. It builds JSON or text reports from `FluxResult` objects, returns planned or applied changes, and exposes report files as service artifacts. Report generation belongs to core services, not to the CLI.
+
+## Reports And Artifacts
+
+Reports are audit artifacts derived from structured results: operation status, summary, steps, warnings, errors, planned changes, applied changes, and artifacts. The report module provides deterministic-enough JSON for tests and simple human-readable text for inspection.
+
+Report documents avoid raw provider payloads and sensitive fields by relying on safe result serialization and report-level path sanitization. They are intended for traceability of dry-run/apply decisions before future MusicLab, scoring, quality, or provider integrations exist.
+
 ## CLI Adapter
 
 The CLI remains a thin adapter. It parses command-line arguments, calls services, renders human-readable output, and maps `Status` values to process exit codes.
 
 Workspace CLI commands are adapters over `WorkspaceService`: `workspace inspect PATH` inspects the layout, while `workspace init PATH --dry-run` plans missing directories and `workspace init PATH --apply` creates them after service-level safety checks.
+
+Report CLI commands are adapters over `ReportService`: `report demo --workspace PATH --format json --dry-run` previews a report artifact, while `--apply` writes it inside `PATH/reports`. The CLI does not assemble report content or bypass service safety checks.
 
 ## Future Controllers
 
