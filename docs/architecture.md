@@ -22,6 +22,14 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `ReportService` owns report preview and writing. It builds JSON or text reports from `FluxResult` objects, returns planned or applied changes, and exposes report files as service artifacts. Report generation belongs to core services, not to the CLI.
 
+`MusicLabService` owns the isolated calibration lab under `workspace/musiclab`. It validates the lab layout, plans or creates MusicLab directories, creates safe sessions, and writes only controlled fake fixtures. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, and `Artifact` objects; it does not print, parse CLI arguments, access providers, create audio, call the network, or touch a real music library.
+
+## MusicLab
+
+MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
+
+MusicLab is service-first. The CLI only invokes `MusicLabService` and renders the returned structured result. Future controllers should do the same instead of duplicating calibration logic or bypassing safety checks.
+
 ## Reports And Artifacts
 
 Reports are audit artifacts derived from structured results: operation status, summary, steps, warnings, errors, planned changes, applied changes, and artifacts. The report module provides deterministic-enough JSON for tests and simple human-readable text for inspection.
@@ -35,6 +43,8 @@ The CLI remains a thin adapter. It parses command-line arguments, calls services
 Workspace CLI commands are adapters over `WorkspaceService`: `workspace inspect PATH` inspects the layout, while `workspace init PATH --dry-run` plans missing directories and `workspace init PATH --apply` creates them after service-level safety checks.
 
 Report CLI commands are adapters over `ReportService`: `report demo --workspace PATH --format json --dry-run` previews a report artifact, while `--apply` writes it inside `PATH/reports`. The CLI does not assemble report content or bypass service safety checks.
+
+MusicLab CLI commands are adapters over `MusicLabService`: `musiclab inspect`, `musiclab init`, `musiclab session create`, and `musiclab fixture create` parse arguments, call the service, render the result, and choose the process exit code. Default behavior remains dry-run unless `--apply` is explicit.
 
 ## Future Controllers
 

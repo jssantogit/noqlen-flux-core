@@ -17,6 +17,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Initial structured result contracts and a service-first base.
 - Safe workspace inspection and initialization primitives.
 - Safe JSON and text report artifact generation from structured service results.
+- An isolated MusicLab foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration.
 
 No operation currently performs real search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -53,3 +54,27 @@ noqlen-flux report demo --workspace ./flux-workspace --format json --apply
 ```
 
 Report files are confined to `workspace/reports` and do not perform network calls, downloads, imports, cleanup, or music library writes.
+
+## MusicLab Foundation
+
+MusicLab is a Flux-owned calibration lab inside the workspace. It is isolated from any real music library and currently creates only safe directories, sessions, and controlled fake JSON fixtures.
+
+Preview MusicLab initialization without writing anything:
+
+```bash
+noqlen-flux musiclab init --workspace ./flux-workspace --dry-run
+```
+
+Apply mode must be explicit before MusicLab directories are created:
+
+```bash
+noqlen-flux musiclab init --workspace ./flux-workspace --apply
+```
+
+Plan a future calibration session without creating it:
+
+```bash
+noqlen-flux musiclab session create --workspace ./flux-workspace --purpose "scoring calibration" --dry-run
+```
+
+MusicLab does not implement search, `slskd`, downloads, audio inspection, ffmpeg, transcode, cleanup, handoff, network calls, or real music library writes.

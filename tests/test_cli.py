@@ -61,3 +61,78 @@ def test_report_demo_apply_works(tmp_path, capsys) -> None:
     assert "report: success" in output
     assert "Wrote report" in output
     assert len(list((workspace / "reports").glob("*.txt"))) == 1
+
+
+def test_musiclab_inspect_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["musiclab", "inspect", "--workspace", str(workspace)]) == 0
+
+    output = capsys.readouterr().out
+    assert "musiclab: success" in output
+    assert "Directory is missing: musiclab" in output
+    assert not workspace.exists()
+
+
+def test_musiclab_init_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["musiclab", "init", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "musiclab: success" in output
+    assert "Would create directory: musiclab" in output
+    assert not workspace.exists()
+
+
+def test_musiclab_init_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["musiclab", "init", "--workspace", str(workspace), "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "musiclab: success" in output
+    assert "Created directory: musiclab" in output
+    assert (workspace / "musiclab" / "sessions").is_dir()
+
+
+def test_musiclab_session_create_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["musiclab", "session", "create", "--workspace", str(workspace), "--session", "session-a", "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "musiclab: success" in output
+    assert "Created directory: musiclab-session" in output
+    assert (workspace / "musiclab" / "sessions" / "session-a" / "fixtures").is_dir()
+
+
+def test_musiclab_fixture_create_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+    assert main(["musiclab", "session", "create", "--workspace", str(workspace), "--session", "session-a", "--apply"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "musiclab",
+                "fixture",
+                "create",
+                "--workspace",
+                str(workspace),
+                "--session",
+                "session-a",
+                "--fixture-id",
+                "good-candidate",
+                "--kind",
+                "candidate",
+                "--apply",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "musiclab: success" in output
+    assert "Wrote fake fixture: good-candidate" in output
+    assert (workspace / "musiclab" / "sessions" / "session-a" / "fixtures" / "good-candidate.json").is_file()

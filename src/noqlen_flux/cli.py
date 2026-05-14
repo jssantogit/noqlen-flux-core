@@ -6,7 +6,7 @@ from . import __version__
 from .config import config_from_env
 from .reports import ReportFormat
 from .results import FluxResult, Status
-from .services import DoctorService, ReportService, WorkspaceService
+from .services import DoctorService, MusicLabService, ReportService, WorkspaceService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +45,43 @@ def build_parser() -> argparse.ArgumentParser:
     report_mode.add_argument("--apply", action="store_true", help="Write the report inside workspace/reports")
     report_demo.set_defaults(func=run_report_demo)
 
+    musiclab = subparsers.add_parser("musiclab", help="Inspect or initialize isolated MusicLab calibration state")
+    musiclab_subparsers = musiclab.add_subparsers(dest="musiclab_command")
+
+    musiclab_inspect = musiclab_subparsers.add_parser("inspect", help="Inspect MusicLab layout without creating files")
+    musiclab_inspect.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_inspect.set_defaults(func=run_musiclab_inspect)
+
+    musiclab_init = musiclab_subparsers.add_parser("init", help="Plan or create MusicLab directories")
+    musiclab_init.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_init_mode = musiclab_init.add_mutually_exclusive_group()
+    musiclab_init_mode.add_argument("--dry-run", action="store_true", help="Plan changes without creating directories")
+    musiclab_init_mode.add_argument("--apply", action="store_true", help="Create missing MusicLab directories")
+    musiclab_init.set_defaults(func=run_musiclab_init)
+
+    musiclab_session = musiclab_subparsers.add_parser("session", help="Manage isolated MusicLab sessions")
+    musiclab_session_subparsers = musiclab_session.add_subparsers(dest="musiclab_session_command")
+    musiclab_session_create = musiclab_session_subparsers.add_parser("create", help="Plan or create a MusicLab session")
+    musiclab_session_create.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_session_create.add_argument("--session", dest="session_id", help="Optional safe session id")
+    musiclab_session_create.add_argument("--purpose", help="Optional session purpose")
+    musiclab_session_mode = musiclab_session_create.add_mutually_exclusive_group()
+    musiclab_session_mode.add_argument("--dry-run", action="store_true", help="Plan changes without creating directories")
+    musiclab_session_mode.add_argument("--apply", action="store_true", help="Create the session directories")
+    musiclab_session_create.set_defaults(func=run_musiclab_session_create)
+
+    musiclab_fixture = musiclab_subparsers.add_parser("fixture", help="Manage controlled fake MusicLab fixtures")
+    musiclab_fixture_subparsers = musiclab_fixture.add_subparsers(dest="musiclab_fixture_command")
+    musiclab_fixture_create = musiclab_fixture_subparsers.add_parser("create", help="Plan or write a fake MusicLab fixture")
+    musiclab_fixture_create.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_fixture_create.add_argument("--session", required=True, dest="session_id", help="Safe MusicLab session id")
+    musiclab_fixture_create.add_argument("--fixture-id", required=True, help="Safe fixture id")
+    musiclab_fixture_create.add_argument("--kind", required=True, help="Safe fixture kind")
+    musiclab_fixture_mode = musiclab_fixture_create.add_mutually_exclusive_group()
+    musiclab_fixture_mode.add_argument("--dry-run", action="store_true", help="Plan changes without writing a file")
+    musiclab_fixture_mode.add_argument("--apply", action="store_true", help="Write the fake fixture")
+    musiclab_fixture_create.set_defaults(func=run_musiclab_fixture_create)
+
     return parser
 
 
@@ -76,6 +113,44 @@ def run_report_demo(args: argparse.Namespace) -> int:
         result = service.preview_report(config, source, args.format)
     else:
         result = service.write_report(config, source, args.format)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_inspect(args: argparse.Namespace) -> int:
+    result = MusicLabService().inspect_lab(config_from_env(args.workspace, dry_run=True))
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_init(args: argparse.Namespace) -> int:
+    dry_run = not args.apply
+    result = MusicLabService().init_lab(config_from_env(args.workspace, dry_run=dry_run), dry_run=dry_run)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_session_create(args: argparse.Namespace) -> int:
+    dry_run = not args.apply
+    result = MusicLabService().create_session(
+        config_from_env(args.workspace, dry_run=dry_run),
+        session_id=args.session_id,
+        purpose=args.purpose,
+        dry_run=dry_run,
+    )
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_fixture_create(args: argparse.Namespace) -> int:
+    dry_run = not args.apply
+    result = MusicLabService().create_fake_fixture(
+        config_from_env(args.workspace, dry_run=dry_run),
+        session_id=args.session_id,
+        fixture_id=args.fixture_id,
+        kind=args.kind,
+        dry_run=dry_run,
+    )
     print(_render_result(result))
     return _exit_code(result.status)
 
