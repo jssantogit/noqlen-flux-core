@@ -1,19 +1,15 @@
-"""Tests for the slskd provider adapter skeleton.
+"""Tests for the slskd provider adapter with offline search flow.
 
 All tests use fake payloads and fake clients only.
 No network access, no real slskd, no real downloads.
 """
-
-import importlib
-import inspect
-import pkgutil
-from pathlib import Path
 
 import pytest
 
 from noqlen_flux.providers.base import SearchProvider
 from noqlen_flux.providers.slskd import (
     FakeSlskdClient,
+    SearchState,
     SlskdPayloadMapper,
     SlskdProvider,
     SlskdProviderConfig,
@@ -102,30 +98,23 @@ def _fake_empty_response() -> dict:
     return {"responses": [{"username": "empty-user", "directory": "Empty", "files": [], "locked_files": []}], "response_count": 0}
 
 
-def _fake_no_files_response() -> dict:
-    return {"responses": [{"username": "no-files-user", "directory": "NoFiles", "files": "not-a-list", "locked_files": []}], "response_count": 0}
-
-
-def _fake_malformed_response() -> dict:
-    return {"responses": "not-a-list", "response_count": 0}
-
-
-def _fake_weird_file_response() -> dict:
+def _fake_multi_response() -> dict:
     return {
         "responses": [
             {
-                "username": "weird-user",
-                "directory": "Weird",
-                "files": [
-                    {"filename": "", "size": -1},
-                    {"filename": "   "},
-                    {"filename": None},
-                    {"size": 100},
-                ],
+                "username": "user-one",
+                "directory": "Music/One",
+                "files": [{"filename": "track1.flac", "size": 1000}],
                 "locked_files": [],
-            }
+            },
+            {
+                "username": "user-two",
+                "directory": "Music/Two",
+                "files": [{"filename": "track2.mp3", "size": 2000}],
+                "locked_files": [],
+            },
         ],
-        "response_count": 0,
+        "response_count": 2,
     }
 
 
@@ -137,13 +126,15 @@ def test_config_defaults() -> None:
     assert config.base_url is None
     assert config.api_key is None
     assert config.timeout_seconds == 30
+    assert config.max_poll_attempts == 10
 
 
 def test_config_custom_values() -> None:
-    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="secret-key", timeout_seconds=60)
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="secret-key", timeout_seconds=60, max_poll_attempts=5)
     assert config.base_url == "http://localhost:5000"
     assert config.api_key == "secret-key"
     assert config.timeout_seconds == 60
+    assert config.max_poll_attempts == 5
 
 
 def test_config_rejects_invalid_timeout() -> None:
@@ -153,12 +144,20 @@ def test_config_rejects_invalid_timeout() -> None:
         SlskdProviderConfig(timeout_seconds=-5)
 
 
+def test_config_rejects_invalid_poll_attempts() -> None:
+    with pytest.raises(ValueError, match="max_poll_attempts must be positive"):
+        SlskdProviderConfig(max_poll_attempts=0)
+    with pytest.raises(ValueError, match="max_poll_attempts must be positive"):
+        SlskdProviderConfig(max_poll_attempts=-1)
+
+
 def test_config_to_dict_redacts_api_key() -> None:
     config = SlskdProviderConfig(api_key="super-secret")
     d = config.to_dict()
     assert d["api_key"] == "[redacted]"
     assert d["base_url"] is None
     assert d["timeout_seconds"] == 30
+    assert d["max_poll_attempts"] == 10
 
 
 def test_config_to_dict_without_api_key() -> None:
@@ -218,7 +217,7 @@ def test_provider_search_without_client_returns_error() -> None:
     assert "no active client" in " ".join(result.errors).lower()
 
 
-# --- Provider with fake client ---
+# --- Provider with fake client: immediate completion ---
 
 
 def test_provider_health_with_healthy_fake_client() -> None:
@@ -251,6 +250,116 @@ def test_provider_search_with_album_fake_client() -> None:
     result = provider.search(_album_query())
     assert len(result.candidates) == 1
     assert len(result.candidates[0].files) == 3
+
+
+def test_provider_search_with_multi_response() -> None:
+    client = FakeSlskdClient(responses=[_fake_multi_response()])
+    provider = SlskdProvider(client=client)
+    result = provider.search(_track_query())
+    assert len(result.candidates) == 2
+    assert result.response_count == 2
+    assert result.candidates[0].username == "user-one"
+    assert result.candidates[1].username == "user-two"
+
+
+def test_provider_search_track_query_builds_correct_text() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()])
+    provider = SlskdProvider(client=client)
+    query = SearchQuery(kind=SearchKind.TRACK, artist="Artist A", title="Title B", extra_terms=["remaster"])
+    result = provider.search(query)
+    assert len(result.candidates) == 1
+
+
+def test_provider_search_album_query_builds_correct_text() -> None:
+    client = FakeSlskdClient(responses=[_fake_album_response()])
+    provider = SlskdProvider(client=client)
+    query = SearchQuery(kind=SearchKind.ALBUM, artist="Artist A", album="Album B")
+    result = provider.search(query)
+    assert len(result.candidates) == 1
+
+
+# --- Provider with fake client: polling behavior ---
+
+
+def test_provider_search_with_poll_delay_completes() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], poll_delay=2)
+    config = SlskdProviderConfig(max_poll_attempts=10)
+    provider = SlskdProvider(config=config, client=client)
+    result = provider.search(_track_query())
+    assert len(result.candidates) == 1
+    assert result.timeout_reached is False
+    assert client.poll_count == 3
+
+
+def test_provider_search_bounded_polling_hits_limit() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], poll_delay=20)
+    config = SlskdProviderConfig(max_poll_attempts=3)
+    provider = SlskdProvider(config=config, client=client)
+    result = provider.search(_track_query())
+    assert result.timeout_reached is True
+    assert result.candidates == []
+    assert "poll limit" in " ".join(result.warnings).lower()
+    assert client.poll_count == 3
+
+
+def test_provider_search_timeout_calls_stop_search() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], poll_delay=20)
+    config = SlskdProviderConfig(max_poll_attempts=3)
+    provider = SlskdProvider(config=config, client=client)
+    result = provider.search(_track_query())
+    assert result.timeout_reached is True
+    search_id_prefix = "fake-search-"
+    for sid in client._active_searches:
+        assert client.was_search_stopped(sid) is True
+
+
+def test_provider_search_fail_after_polls_returns_error() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], poll_delay=5, fail_after_polls=2)
+    config = SlskdProviderConfig(max_poll_attempts=10)
+    provider = SlskdProvider(config=config, client=client)
+    result = provider.search(_track_query())
+    assert len(result.errors) >= 1
+    assert "failure state" in " ".join(result.errors).lower()
+
+
+# --- Provider with fake client: error scenarios ---
+
+
+def test_provider_search_start_error_returns_error() -> None:
+    client = FakeSlskdClient(raise_on_start=True)
+    provider = SlskdProvider(client=client)
+    result = provider.search(_track_query())
+    assert len(result.errors) >= 1
+    assert "start failed" in " ".join(result.errors).lower()
+
+
+def test_provider_search_state_error_adds_warning_and_retries() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], raise_on_state=True)
+    config = SlskdProviderConfig(max_poll_attempts=3)
+    provider = SlskdProvider(config=config, client=client)
+    result = provider.search(_track_query())
+    assert result.timeout_reached is True
+    assert len(result.warnings) >= 1
+
+
+def test_provider_search_responses_error_returns_error() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], raise_on_responses=True)
+    provider = SlskdProvider(client=client)
+    result = provider.search(_track_query())
+    assert len(result.errors) >= 1
+    assert "response retrieval failed" in " ".join(result.errors).lower()
+
+
+# --- Provider with fake client: empty responses ---
+
+
+def test_provider_search_empty_response_returns_warning() -> None:
+    client = FakeSlskdClient(responses=[_fake_empty_response()])
+    provider = SlskdProvider(client=client)
+    result = provider.search(_track_query())
+    assert result.candidates == []
+    assert len(result.warnings) >= 1
+    assert "no candidates" in " ".join(result.warnings).lower()
 
 
 # --- Mapper tests ---
@@ -295,17 +404,38 @@ def test_mapper_empty_response_returns_empty_list() -> None:
 
 
 def test_mapper_malformed_response_returns_empty_list() -> None:
-    candidates = SlskdPayloadMapper.map_search_response_to_candidates(_fake_malformed_response(), _track_query())
+    candidates = SlskdPayloadMapper.map_search_response_to_candidates({"responses": "not-a-list"}, _track_query())
     assert candidates == []
 
 
 def test_mapper_no_files_response_returns_empty_list() -> None:
-    candidates = SlskdPayloadMapper.map_search_response_to_candidates(_fake_no_files_response(), _track_query())
+    candidates = SlskdPayloadMapper.map_search_response_to_candidates(
+        {"responses": [{"username": "no-files-user", "directory": "NoFiles", "files": "not-a-list", "locked_files": []}]},
+        _track_query(),
+    )
     assert candidates == []
 
 
 def test_mapper_weird_file_payload_does_not_crash() -> None:
-    candidates = SlskdPayloadMapper.map_search_response_to_candidates(_fake_weird_file_response(), _track_query())
+    candidates = SlskdPayloadMapper.map_search_response_to_candidates(
+        {
+            "responses": [
+                {
+                    "username": "weird-user",
+                    "directory": "Weird",
+                    "files": [
+                        {"filename": "", "size": -1},
+                        {"filename": "   "},
+                        {"filename": None},
+                        {"size": 100},
+                    ],
+                    "locked_files": [],
+                }
+            ],
+            "response_count": 0,
+        },
+        _track_query(),
+    )
     assert candidates == []
 
 
@@ -445,7 +575,7 @@ def test_fake_slskd_client_is_not_fake_search_provider() -> None:
 
 def test_fake_slskd_client_empty_responses() -> None:
     client = FakeSlskdClient()
-    result = client.search(_track_query())
+    result = client.get_search_responses("fake-id")
     assert result["responses"] == []
     assert result["response_count"] == 0
 
@@ -456,3 +586,77 @@ def test_fake_slskd_client_health() -> None:
 
     unhealthy = FakeSlskdClient(healthy=False)
     assert unhealthy.health_check()["status"] == "error"
+
+
+def test_fake_slskd_client_start_search_returns_id() -> None:
+    client = FakeSlskdClient()
+    sid = client.start_search("artist track")
+    assert sid.startswith("fake-search-")
+
+
+def test_fake_slskd_client_poll_count_tracking() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], poll_delay=2)
+    sid = client.start_search("test")
+    client.get_search_state(sid)
+    client.get_search_state(sid)
+    client.get_search_state(sid)
+    assert client.poll_count == 3
+
+
+def test_fake_slskd_client_was_search_stopped() -> None:
+    client = FakeSlskdClient(responses=[_fake_track_response()], poll_delay=20)
+    config = SlskdProviderConfig(max_poll_attempts=3)
+    provider = SlskdProvider(config=config, client=client)
+    provider.search(_track_query())
+    for sid in client._active_searches:
+        assert client.was_search_stopped(sid) is True
+
+
+# --- SearchService integration with SlskdProvider ---
+
+
+def test_search_service_with_slskd_provider() -> None:
+    from noqlen_flux.services.search import SearchService
+
+    client = FakeSlskdClient(responses=[_fake_track_response()])
+    provider = SlskdProvider(client=client)
+    query = SearchQuery(kind=SearchKind.TRACK, artist="Example Artist", title="Example Track")
+    result = SearchService().search(query, provider)
+    assert result.status.value == "success"
+    assert result.summary["provider"] == "slskd"
+    assert result.summary["candidate_count"] == 1
+
+
+def test_search_service_with_slskd_provider_scoring() -> None:
+    from noqlen_flux.services.scoring import CandidateScoringService
+    from noqlen_flux.services.search import SearchService
+
+    client = FakeSlskdClient(responses=[_fake_track_response()])
+    provider = SlskdProvider(client=client)
+    query = SearchQuery(kind=SearchKind.TRACK, artist="Example Artist", title="Example Track")
+    result = SearchService().search(query, provider, scoring_service=CandidateScoringService())
+    assert result.summary["candidate_count"] == 1
+    assert len(result.summary.get("scores", [])) == 1
+
+
+def test_download_planning_with_slskd_candidate() -> None:
+    from noqlen_flux.downloads import DownloadConstraint, DownloadIntent, DownloadRequest
+    from noqlen_flux.services import DownloadPlanningService
+    from noqlen_flux.services.scoring import CandidateScoringService
+
+    client = FakeSlskdClient(responses=[_fake_track_response()])
+    provider = SlskdProvider(client=client)
+    query = SearchQuery(kind=SearchKind.TRACK, artist="Example Artist", title="Example Track")
+    provider_result = provider.search(query)
+    assert len(provider_result.candidates) == 1
+    candidate = provider_result.candidates[0]
+    score = CandidateScoringService().score_candidate(query, candidate)
+    request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{query.artist} - {query.title}",
+        score=score,
+        constraints=DownloadConstraint(),
+    )
+    result = DownloadPlanningService().plan_download(request)
+    assert result.status.value == "success"
