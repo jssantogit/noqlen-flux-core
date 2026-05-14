@@ -112,15 +112,17 @@ Automated tests must use fake providers. Real network health checks belong only 
 The `SlskdProvider` adapter under `providers/slskd.py` is an external adapter, not Flux core.
 
 - Slskd adapter tests must use fake payloads and `FakeSlskdClient` only. No real slskd network access is permitted in automated tests.
-- Real slskd network access must be isolated and opt-in in a future commit.
+- slskd network access is disabled by default (`allow_network=false`). Health checks require explicit opt-in.
 - Bounded polling is required: `max_poll_attempts` limits the number of state checks. No infinite loops are permitted.
 - `SlskdProviderConfig.api_key` is redacted in `to_dict()` and `__repr__()`. It must never appear in logs, artifacts, or test output.
+- API keys must be provided via environment variable (`--api-key-env`), not as literal CLI arguments.
 - `SlskdPayloadMapper` must not expose raw provider payloads in `SearchCandidate`, `CandidateFile`, or `SearchProviderResult` metadata.
 - No raw provider payload, secrets, private paths, lyrics, or fingerprints should leak through the adapter.
 - Core services must not import `providers.slskd`. They depend on generic contracts only.
-- Without an injected client, `SlskdProvider` returns `UNAVAILABLE` and does not attempt network access.
+- Without an injected client and without `allow_network`, `SlskdProvider` returns `UNAVAILABLE` with "network access disabled".
+- `SlskdHttpClient` uses only `urllib.request` (standard library). It supports health checks only; search, download, queue, and transfer are not implemented.
 - Client errors during polling, start, or response retrieval produce controlled `SearchProviderResult.errors`, not raw exceptions.
-- Without an injected client, `SlskdProvider` returns `UNAVAILABLE` and does not attempt network access.
+- Network errors from `SlskdHttpClient` do not leak tokens, headers, or raw response content.
 
 ## Search Providers
 

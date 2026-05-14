@@ -10,11 +10,15 @@ without rewriting the core.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from noqlen_flux.providers.base import SearchProvider
 from noqlen_flux.providers.status import (
@@ -37,6 +41,7 @@ _logger = logging.getLogger(__name__)
 _REDACTED = "[redacted]"
 
 _DEFAULT_MAX_POLL_ATTEMPTS = 10
+_DEFAULT_HTTP_TIMEOUT = 5
 
 
 class SearchState(StrEnum):
@@ -54,12 +59,14 @@ class SlskdProviderConfig:
     """Configuration for the slskd provider adapter.
 
     Sensitive fields are redacted in to_dict/repr.
+    Network access is disabled by default.
     """
 
     base_url: str | None = None
     api_key: str | None = None
-    timeout_seconds: int = 30
+    timeout_seconds: int = _DEFAULT_HTTP_TIMEOUT
     max_poll_attempts: int = _DEFAULT_MAX_POLL_ATTEMPTS
+    allow_network: bool = False
 
     def __post_init__(self) -> None:
         if self.timeout_seconds < 1:
@@ -74,6 +81,7 @@ class SlskdProviderConfig:
                 "api_key": self.api_key,
                 "timeout_seconds": self.timeout_seconds,
                 "max_poll_attempts": self.max_poll_attempts,
+                "allow_network": self.allow_network,
             }
         )
 
@@ -83,7 +91,8 @@ class SlskdProviderConfig:
             f"base_url={self.base_url!r}, "
             f"api_key={_REDACTED if self.api_key else None!r}, "
             f"timeout_seconds={self.timeout_seconds!r}, "
-            f"max_poll_attempts={self.max_poll_attempts!r})"
+            f"max_poll_attempts={self.max_poll_attempts!r}, "
+            f"allow_network={self.allow_network!r})"
         )
 
 
@@ -91,7 +100,8 @@ class SlskdClientProtocol(Protocol):
     """Injectable protocol for slskd-like client interactions.
 
     Implementations handle actual network communication.
-    This commit provides only FakeSlskdClient for tests.
+    This commit provides FakeSlskdClient for tests and
+    SlskdHttpClient for optional real network access.
 
     The protocol follows a lifecycle:
     1. start_search(query_text) -> search_id
@@ -200,6 +210,66 @@ class FakeSlskdClient:
 
     def was_search_stopped(self, search_id: str) -> bool:
         return self._active_searches.get(search_id, False)
+
+
+class SlskdHttpClient:
+    """Optional real HTTP client for slskd health checks.
+
+    Uses only the Python standard library (urllib.request).
+    Network access must be explicitly allowed via config.
+    API keys are never exposed in error messages or metadata.
+
+    This client is intentionally minimal: health check only.
+    Search, download, queue, and transfer are NOT implemented here.
+    """
+
+    def __init__(self, config: SlskdProviderConfig) -> None:
+        self._config = config
+
+    def health_check(self) -> dict[str, Any]:
+        """Perform a real health check against the slskd API.
+
+        Returns a dict with 'status' and optional metadata.
+        Network errors are converted to controlled error dicts.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            return {"status": "error", "message": "no base_url configured"}
+
+        url = f"{base_url.rstrip('/')}/api/server/version"
+        headers: dict[str, str] = {}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        req = Request(url, headers=headers, method="GET")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds) as resp:
+                raw = resp.read()
+                try:
+                    data = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return {"status": "error", "message": "invalid response from slskd"}
+                return {"status": "ok", "version": data.get("version", "unknown")}
+        except URLError as exc:
+            reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+            return {"status": "error", "message": f"slskd unreachable: {reason}"}
+        except TimeoutError:
+            return {"status": "error", "message": "slskd health check timed out"}
+        except OSError as exc:
+            return {"status": "error", "message": f"slskd network error"}
+
+    def start_search(self, query_text: str) -> str:
+        raise NotImplementedError("real search is not implemented in this commit")
+
+    def get_search_state(self, search_id: str) -> dict[str, Any]:
+        raise NotImplementedError("real search is not implemented in this commit")
+
+    def get_search_responses(self, search_id: str) -> dict[str, Any]:
+        raise NotImplementedError("real search is not implemented in this commit")
+
+    def stop_search(self, search_id: str) -> None:
+        raise NotImplementedError("real search is not implemented in this commit")
 
 
 class SlskdPayloadMapper:
@@ -398,13 +468,27 @@ class SlskdProvider(SearchProvider):
 
     def health(self) -> ProviderHealth:
         if self._client is None:
+            if self._config.allow_network and self._config.base_url:
+                real_client = SlskdHttpClient(self._config)
+                try:
+                    payload = real_client.health_check()
+                    return SlskdPayloadMapper.map_provider_health(self._config, payload)
+                except Exception as exc:  # noqa: BLE001
+                    return ProviderHealth(
+                        provider=self.name,
+                        kind=ProviderKind.EXTERNAL,
+                        availability=ProviderAvailability.UNAVAILABLE,
+                        status_message="slskd health check failed",
+                        capabilities=self.capabilities(),
+                        errors=["health check exception"],
+                    )
             return ProviderHealth(
                 provider=self.name,
                 kind=ProviderKind.EXTERNAL,
                 availability=ProviderAvailability.UNAVAILABLE,
-                status_message="slskd adapter has no active client",
+                status_message="network access disabled",
                 capabilities=self.capabilities(),
-                warnings=["no slskd client configured; network access disabled"],
+                warnings=["slskd network access is disabled by default; use allow_network=true to enable"],
             )
 
         try:

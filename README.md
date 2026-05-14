@@ -23,7 +23,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Download planning models and services that transform candidates into structured plans without executing transfers.
 - Transfer and queue planning models and services that transform download plans into structured queue plans without executing transfers.
 - Generic `TransferProvider` contract for future provider adapters (slskd, NativeSoulseekProvider).
-- Slskd adapter (`providers/slskd.py`) with offline/injected-client search flow, bounded polling, and fake client. Real slskd network integration is not implemented yet.
+- Slskd adapter (`providers/slskd.py`) with offline/injected-client search flow, bounded polling, fake client, and opt-in health client. Network access is disabled by default. Real slskd search/download are not implemented yet.
 - Provider health, capabilities, and status models with a generic `BaseProvider` interface.
 - `ProviderService` for inspecting provider health and validating capabilities without network access.
 - Post-download quality result contracts and fake simulation service (`QualityGrade`, `QualityFinding`, `QualityResult`, `QualityProfile`, `QualitySummary`).

@@ -22,17 +22,18 @@ Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `Downlo
 
 `SlskdProvider` under `providers/slskd.py` is an **external adapter**, not Flux core. It implements the generic `SearchProvider` contract and maps slskd-like payloads into Flux-owned models (`SearchCandidate`, `CandidateFile`, `ProviderHealth`).
 
-- `SlskdProviderConfig` holds optional `base_url`, `api_key` (redacted in serialization), `timeout_seconds`, and `max_poll_attempts`.
+- `SlskdProviderConfig` holds optional `base_url`, `api_key` (redacted in serialization), `timeout_seconds`, `max_poll_attempts`, and `allow_network` (default `false`).
 - `SlskdClientProtocol` is an injectable protocol for future network clients with a polling lifecycle: `start_search`, `get_search_state`, `get_search_responses`, `stop_search`, and `health_check`.
 - `SearchState` enum tracks the conceptual search lifecycle: `InProgress`, `Completed`, `Failed`, `Stopped`, `Unknown`.
 - `FakeSlskdClient` simulates the full polling lifecycle for offline tests: immediate completion, delayed completion (InProgress then Completed), timeout/poll-limit exhaustion, failure after N polls, controlled errors, empty responses, locked files, and multi-file album responses.
+- `SlskdHttpClient` is an optional real HTTP client using only `urllib.request`. It supports health checks only; search, download, queue, and transfer are not implemented. It requires `allow_network=true` and `base_url` to be set.
 - `SlskdPayloadMapper` contains pure mapping functions that convert slskd-like response dicts into Flux models. It does not access the network, write files, or expose raw payloads.
-- `SlskdProvider` uses bounded polling via `max_poll_attempts`. Without an injected client, it returns `ProviderAvailability.UNAVAILABLE` and controlled errors. It does **not** perform network calls.
+- `SlskdProvider` uses bounded polling via `max_poll_attempts`. Without an injected client and without `allow_network`, it returns `ProviderAvailability.UNAVAILABLE` with "network access disabled". It does **not** perform network calls by default.
 - On timeout/poll-limit exhaustion, the provider calls `stop_search` and returns `SearchProviderResult` with `timeout_reached=True` and a warning.
 - Core services do **not** import `providers.slskd`. They depend on `BaseProvider`, `SearchProvider`, and `TransferProvider` contracts only.
 - `SearchService`, `CandidateScoringService`, and `DownloadPlanningService` all work with `SlskdProvider` through the generic `SearchProvider` contract.
-- A future `NativeSoulseekProvider` can implement the same `SlskdClientProtocol` and replace `FakeSlskdClient` without rewriting the core.
-- Real network access is not implemented yet.
+- A future `NativeSoulseekProvider` can implement the same `SlskdClientProtocol` and replace `FakeSlskdClient` or `SlskdHttpClient` without rewriting the core.
+- Real network access is opt-in via `allow_network`. Search and download real network flows are not implemented yet.
 
 ## Provider Boundary
 

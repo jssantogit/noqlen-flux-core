@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from . import __version__
 from .config import config_from_env
@@ -173,11 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
     provider_subparsers = provider.add_subparsers(dest="provider_command")
 
     provider_inspect = provider_subparsers.add_parser("inspect", help="Inspect provider health and capabilities")
-    provider_inspect.add_argument("provider_kind", choices=["fake", "fake-transfer"], help="Provider to inspect")
+    provider_inspect.add_argument("provider_kind", choices=["fake", "fake-transfer", "slskd"], help="Provider to inspect")
     provider_inspect.set_defaults(func=run_provider_inspect)
 
     provider_health = provider_subparsers.add_parser("health", help="Check provider health status")
-    provider_health.add_argument("provider_kind", choices=["fake", "fake-transfer"], help="Provider to check")
+    provider_health.add_argument("provider_kind", choices=["fake", "fake-transfer", "slskd"], help="Provider to check")
+    provider_health.add_argument("--offline", action="store_true", help="Check health without network access (default for slskd)")
+    provider_health.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    provider_health.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    provider_health.add_argument("--allow-network", action="store_true", help="Allow network access for slskd health check")
     provider_health.set_defaults(func=run_provider_health)
 
     quality = subparsers.add_parser("quality", help="Inspect post-download quality (contracts-only, no real audio analysis)")
@@ -493,7 +498,7 @@ def run_provider_inspect(args: argparse.Namespace) -> int:
 
 
 def run_provider_health(args: argparse.Namespace) -> int:
-    provider = _resolve_provider(args.provider_kind)
+    provider = _resolve_provider(args.provider_kind, args)
     result = ProviderService().check_provider_health(provider)
     print(_render_result(result))
     return _exit_code(result.status)
@@ -775,7 +780,7 @@ def run_cleanup_plan_fake(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
-def _resolve_provider(kind: str):
+def _resolve_provider(kind: str, args: argparse.Namespace | None = None):
     if kind == "fake":
         return FakeSearchProvider(
             _demo_candidates(),
@@ -789,6 +794,21 @@ def _resolve_provider(kind: str):
             kind=ProviderKind.FAKE,
             availability=ProviderAvailability.AVAILABLE,
         )
+    if kind == "slskd":
+        from noqlen_flux.providers.slskd import SlskdProvider, SlskdProviderConfig
+
+        allow_network = getattr(args, "allow_network", False) if args else False
+        url = getattr(args, "url", None) if args else None
+        api_key_env = getattr(args, "api_key_env", None) if args else None
+        api_key = os.environ.get(api_key_env) if api_key_env else None
+
+        config = SlskdProviderConfig(
+            base_url=url,
+            api_key=api_key,
+            allow_network=allow_network,
+        )
+        return SlskdProvider(config=config)
+
     raise ValueError(f"unknown provider kind: {kind}")
 
 

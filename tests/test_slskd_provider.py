@@ -125,8 +125,9 @@ def test_config_defaults() -> None:
     config = SlskdProviderConfig()
     assert config.base_url is None
     assert config.api_key is None
-    assert config.timeout_seconds == 30
+    assert config.timeout_seconds == 5
     assert config.max_poll_attempts == 10
+    assert config.allow_network is False
 
 
 def test_config_custom_values() -> None:
@@ -156,8 +157,9 @@ def test_config_to_dict_redacts_api_key() -> None:
     d = config.to_dict()
     assert d["api_key"] == "[redacted]"
     assert d["base_url"] is None
-    assert d["timeout_seconds"] == 30
+    assert d["timeout_seconds"] == 5
     assert d["max_poll_attempts"] == 10
+    assert d["allow_network"] is False
 
 
 def test_config_to_dict_without_api_key() -> None:
@@ -204,7 +206,7 @@ def test_provider_health_without_client_returns_unavailable() -> None:
     assert health.provider == "slskd"
     assert health.kind == ProviderKind.EXTERNAL
     assert health.availability == ProviderAvailability.UNAVAILABLE
-    assert "no active client" in (health.status_message or "").lower()
+    assert "network access disabled" in (health.status_message or "").lower()
     assert len(health.warnings) >= 1
 
 
@@ -660,3 +662,100 @@ def test_download_planning_with_slskd_candidate() -> None:
     )
     result = DownloadPlanningService().plan_download(request)
     assert result.status.value == "success"
+
+
+# --- SlskdHttpClient tests ---
+
+
+def test_slskd_http_client_exists() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+    assert client is not None
+
+
+def test_slskd_http_client_no_base_url_returns_error() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    result = client.health_check()
+    assert result["status"] == "error"
+    assert "no base_url" in result["message"].lower()
+
+
+def test_slskd_http_client_does_not_use_external_network_libs() -> None:
+    from noqlen_flux.providers import slskd as slskd_module
+
+    source = open(slskd_module.__file__).read()
+    assert "import requests" not in source
+    assert "import httpx" not in source
+    assert "import aiohttp" not in source
+
+
+def test_slskd_http_client_search_raises_not_implemented() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+    with pytest.raises(NotImplementedError):
+        client.start_search("test")
+    with pytest.raises(NotImplementedError):
+        client.get_search_state("test")
+    with pytest.raises(NotImplementedError):
+        client.get_search_responses("test")
+    with pytest.raises(NotImplementedError):
+        client.stop_search("test")
+
+
+# --- allow_network config tests ---
+
+
+def test_config_allow_network_default_false() -> None:
+    config = SlskdProviderConfig()
+    assert config.allow_network is False
+
+
+def test_config_allow_network_can_be_true() -> None:
+    config = SlskdProviderConfig(allow_network=True)
+    assert config.allow_network is True
+
+
+def test_config_allow_network_appears_in_to_dict() -> None:
+    config = SlskdProviderConfig(allow_network=True)
+    d = config.to_dict()
+    assert d["allow_network"] is True
+
+
+def test_config_allow_network_appears_in_repr() -> None:
+    config = SlskdProviderConfig(allow_network=True)
+    r = repr(config)
+    assert "allow_network=True" in r
+
+
+# --- Provider health with allow_network ---
+
+
+def test_provider_health_offline_no_client_returns_network_disabled() -> None:
+    config = SlskdProviderConfig(allow_network=False)
+    provider = SlskdProvider(config=config)
+    health = provider.health()
+    assert health.availability == ProviderAvailability.UNAVAILABLE
+    assert "network access disabled" in (health.status_message or "").lower()
+
+
+def test_provider_health_offline_no_base_url_returns_network_disabled() -> None:
+    config = SlskdProviderConfig(allow_network=True)
+    provider = SlskdProvider(config=config)
+    health = provider.health()
+    assert health.availability == ProviderAvailability.UNAVAILABLE
+    assert "network access disabled" in (health.status_message or "").lower()
+
+
+def test_provider_health_with_fake_client_ignores_allow_network() -> None:
+    client = FakeSlskdClient(healthy=True)
+    config = SlskdProviderConfig(allow_network=False)
+    provider = SlskdProvider(config=config, client=client)
+    health = provider.health()
+    assert health.availability == ProviderAvailability.AVAILABLE
