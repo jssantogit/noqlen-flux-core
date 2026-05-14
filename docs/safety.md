@@ -37,7 +37,21 @@ Suspicious, incomplete, unsupported, or policy-failing items should be isolated 
 
 ## Cleanup
 
-Cleanup must be conservative. Automatic deletion should only apply to delete-eligible items with objective failures and clear retention policy. No auto-delete behavior is active in the bootstrap project.
+Cleanup planning does not delete anything. `CleanupPlanningService` evaluates `CleanupCandidate` objects against a `CleanupPolicy` and produces a `CleanupPlan` with `PlannedChange` entries. No file is deleted, moved, copied, or created.
+
+`delete_eligible` is not deletion. It means the item is eligible for future deletion pending explicit policy approval and apply-mode execution.
+
+`plan_delete` is only a planned decision. It does not execute any filesystem operation. It is expressed as a `PlannedChange`, never an `AppliedChange`.
+
+`auto_delete_enabled` exists only as a policy field and never executes any deletion. Auto-delete does not exist in this commit. Future auto-delete would require a separate executor layer, explicit policy, reports, limits, workspace safety, and explicit apply.
+
+Heuristic findings must never cause automatic deletion. Heuristic-only candidates are routed to `review`, never `plan_delete`, regardless of policy configuration.
+
+Objective failures can inform cleanup planning but still as a plan only. `mark_delete_eligible` is a planned decision, not an execution.
+
+Absolute paths and path traversal markers are blocked in `CleanupCandidate.relative_path`. No candidate can reference a path outside the workspace boundary.
+
+Automated cleanup tests must use fake candidates, temporary directories, or controlled fixtures only. They must not use real music files, network access, or personal filesystem paths.
 
 ## Path Safety
 

@@ -31,6 +31,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Safe filesystem operation executor with dry-run/apply safety (`FileOperationType`, `FileOperationState`, `FileOperation`, `FileOperationPlan`, `FileOperationResult`, `FileExecutionPolicy`, `SafeFileOperationService`).
 - Safe staging execution workflow connecting `StagingPlan` with `SafeFileOperationService` (`StagingExecutionPolicy`, `StagingExecutionSummary`, `StagingExecutionService`).
 - Safe handoff manifest foundation for future Flux -> Forge contract (`HandoffManifest`, `HandoffItem`, `HandoffManifestService`).
+- Cleanup planning contracts and fake planning service (`CleanupCandidateKind`, `CleanupActionType`, `CleanupRisk`, `CleanupCandidate`, `CleanupPolicy`, `CleanupDecision`, `CleanupPlan`, `CleanupPlanningService`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -313,3 +314,21 @@ noqlen-flux handoff demo --workspace ./flux-workspace --apply
 ```
 
 Manifests are confined to `workspace/manifests` and do not contain secrets, full lyrics, raw fingerprints, or raw provider payloads. This is not real Forge integration, import, cleanup, or music library management.
+
+## Cleanup Planning Foundation
+
+Post-download cleanup planning is a separate Flux domain from staging execution and routing decision. `CleanupPlanningService` evaluates `CleanupCandidate` objects against a `CleanupPolicy` and produces a `CleanupPlan` with `PlannedChange` entries. It does not delete, move, copy, or create any files.
+
+Plan cleanup for fake candidates with the default policy:
+
+```bash
+noqlen-flux cleanup plan fake --dry-run
+```
+
+Plan cleanup with delete planning enabled (still does not delete anything):
+
+```bash
+noqlen-flux cleanup plan fake --allow-delete-planning --dry-run
+```
+
+This is not real cleanup, auto-delete, or music library management. `delete_eligible` does not mean deletion has occurred. `plan_delete` is only a planned decision expressed as a `PlannedChange`, never an `AppliedChange`. `auto_delete_enabled` exists only as a policy field and never executes any deletion. Heuristic findings never cause automatic deletion. All cleanup commands are planned-only and have no `--apply` mode. Apply mode is explicitly rejected with a clear message.

@@ -242,6 +242,44 @@ Safety constraints:
 
 The separation must remain: Flux generates the manifest; Forge consumes it. Flux does not correct final metadata; Forge does not download. The handoff is a file-based boundary, not a CLI output dependency or a real integration.
 
+## Cleanup Planning Foundation
+
+Post-download cleanup planning is a separate core domain from staging execution and routing decision. `RoutingDecision` and `StagingPlan` may mark items as `delete_eligible`, but `CleanupPlanningService` is the layer that evaluates those candidates against a `CleanupPolicy` and produces a `CleanupPlan`. This is planning only; no file is deleted, moved, or created.
+
+Flux owns these cleanup models:
+
+- `CleanupCandidateKind` — candidate classification: `rejected`, `delete_eligible`, `temporary`, `orphaned`, `stale_report`, `stale_manifest`, `unknown`.
+- `CleanupActionType` — planned action: `keep`, `review`, `mark_delete_eligible`, `plan_delete`, `none`. All actions are planned-only at this stage; no real file deletion occurs.
+- `CleanupRisk` — risk level: `low`, `medium`, `high`.
+- `CleanupCandidate` — structured cleanup candidate: candidate_id, kind, optional relative_path, optional size_bytes, optional age_days, optional source, reasons, warnings, and safe metadata.
+- `CleanupPolicy` — versioned policy with name, version, description, `allow_delete_planning` (default false), `auto_delete_enabled` (default false, never executed), optional `min_age_days`, optional `max_total_bytes`, `delete_only_with_report` (default true), `require_explicit_apply` (default true), and safe metadata.
+- `CleanupDecision` — structured decision for a single candidate: candidate_id, action_type, risk, reasons, warnings, errors, and safe metadata.
+- `CleanupPlan` — aggregate plan with plan_id, decisions, planned_changes, total_candidate_count, optional total_planned_bytes, warnings, errors, and safe metadata.
+
+`CleanupPlanningService` provides service-level cleanup evaluation and planning. It accepts `CleanupCandidate` objects and returns `FluxResult` with `PlannedChange` objects. It does not access the network, move files, delete files, create files, copy files, or know about `slskd`.
+
+Cleanup planning logic:
+
+- `CleanupCandidateKind` rejected → `review` by default. If `min_age_days` is set and candidate age meets threshold → `mark_delete_eligible` (as `PlannedChange`, not execution).
+- `CleanupCandidateKind` delete_eligible → `review` if `allow_delete_planning` is false (default). → `plan_delete` only if `allow_delete_planning` is true, and only as a `PlannedChange`.
+- Heuristic-only delete_eligible candidates → `review`, never `plan_delete`, regardless of policy.
+- `CleanupCandidateKind` temporary → `review` by default. If `min_age_days` is met → `mark_delete_eligible`.
+- `CleanupCandidateKind` orphaned → `review` by default (conservative).
+- `CleanupCandidateKind` stale_report / stale_manifest → `review` by default. If `min_age_days` is met → `mark_delete_eligible`.
+- `CleanupCandidateKind` unknown → `review` with high risk.
+
+`delete_eligible` is not deletion. It means the item is eligible for future deletion pending explicit policy approval and apply-mode execution. No real delete, move, copy, or cleanup occurs in this commit.
+
+`auto_delete_enabled` exists only as a policy field and must never execute any deletion. Future auto-delete would require a separate executor layer, explicit policy, reports, limits, workspace safety, and explicit apply.
+
+Heuristic warnings must never cause `plan_delete` action. Objective failures can inform `mark_delete_eligible` or `plan_delete` future actions, but only through explicit `CleanupPolicy` configuration with `allow_delete_planning` set to true.
+
+`CleanupPlan` uses `PlannedChange` objects, never `AppliedChange`. It does not call `SafeFileOperationService` for deletion. It does not create, move, copy, or delete any files.
+
+Source and target relative paths are validated for safety: absolute paths and path traversal markers are blocked.
+
+The separation must remain: routing (planned decision) → staging (planned filesystem change) → staging execution (orchestrated workflow) → cleanup planning (planned cleanup). `CleanupPlanningService` does not execute `StagingExecutionService` or `SafeFileOperationService` for deletion. `CleanupPlanningService` consumes `CleanupCandidate` but does not alter routing, staging, or quality results.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
@@ -279,6 +317,8 @@ Staging CLI commands are adapters over `StagingPlanService` and `StagingExecutio
 Fileops CLI commands are adapters over `SafeFileOperationService`: `fileops demo --workspace PATH --dry-run` plans safe filesystem operations without executing them, while `fileops demo --workspace PATH --apply` executes mkdir/copy/move operations within the workspace boundary per policy. The CLI does not implement file operation logic, delete files, or perform operations outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
 
 Handoff CLI commands are adapters over `HandoffManifestService`: `handoff demo --workspace PATH --dry-run` previews a safe demo handoff manifest without writing a file, while `handoff demo --workspace PATH --apply` writes the manifest JSON inside `PATH/manifests`. `handoff validate --workspace PATH --demo` validates a demo manifest. The CLI does not implement manifest logic, call Forge, perform real import, or touch a real music library. Default behavior is dry-run; `--apply` must be explicit.
+
+Cleanup planning CLI commands are adapters over `CleanupPlanningService`: `cleanup plan fake --dry-run` evaluates fake cleanup candidates against the default policy and returns a `FluxResult` with `PlannedChange` objects. `cleanup plan fake --allow-delete-planning --dry-run` uses a policy with `allow_delete_planning=true` but still does not delete anything. `cleanup plan fake --workspace PATH --dry-run` accepts an optional workspace path for future integration. The CLI does not implement cleanup logic, delete files, move files, create files, or perform real cleanup. Apply mode is explicitly rejected with a clear message. All cleanup commands are planned-only and have no `--apply` mode.
 
 ## Future Controllers
 

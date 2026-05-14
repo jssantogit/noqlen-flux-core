@@ -1,6 +1,7 @@
 """Service layer entry points for Noqlen Flux Core."""
 
 from .base import FluxService
+from .cleanup import CleanupPlanningService
 from .doctor import DoctorService
 from .downloads import DownloadPlanningService
 from .fileops import SafeFileOperationService
@@ -19,6 +20,7 @@ from .workspace import WorkspaceService
 
 __all__ = [
     "CandidateScoringService",
+    "CleanupPlanningService",
     "DoctorService",
     "DownloadPlanningService",
     "FluxService",

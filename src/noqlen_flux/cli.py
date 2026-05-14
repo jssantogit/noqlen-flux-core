@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -226,6 +226,21 @@ def build_parser() -> argparse.ArgumentParser:
     handoff_validate.add_argument("--workspace", required=True, help="Workspace root path")
     handoff_validate.add_argument("--demo", action="store_true", help="Validate a demo manifest")
     handoff_validate.set_defaults(func=run_handoff_validate)
+
+    cleanup = subparsers.add_parser("cleanup", help="Plan safe cleanup operations (planned-only, no execution)")
+    cleanup_subparsers = cleanup.add_subparsers(dest="cleanup_command")
+
+    cleanup_plan = cleanup_subparsers.add_parser("plan", help="Plan cleanup without executing it")
+    cleanup_plan_subparsers = cleanup_plan.add_subparsers(dest="cleanup_plan_source")
+
+    cleanup_plan_fake = cleanup_plan_subparsers.add_parser("fake", help="Plan cleanup from fake candidates")
+    cleanup_plan_fake.add_argument("--workspace", help="Optional workspace root path")
+    cleanup_plan_fake.add_argument("--allow-delete-planning", action="store_true", help="Allow delete planning in policy")
+    cleanup_plan_fake.add_argument("--min-age-days", type=int, help="Minimum age in days for cleanup candidates")
+    cleanup_plan_fake_mode = cleanup_plan_fake.add_mutually_exclusive_group()
+    cleanup_plan_fake_mode.add_argument("--dry-run", action="store_true", help="Plan cleanup without executing it (default)")
+    cleanup_plan_fake_mode.add_argument("--apply", action="store_true", help="Apply mode is not supported for cleanup planning")
+    cleanup_plan_fake.set_defaults(func=run_cleanup_plan_fake)
 
     return parser
 
@@ -703,6 +718,37 @@ def run_handoff_validate(args: argparse.Namespace) -> int:
     return 0 if validation.valid else 1
 
 
+def run_cleanup_plan_fake(args: argparse.Namespace) -> int:
+    from noqlen_flux.cleanup import CleanupPolicy, build_fake_cleanup_candidates
+    from noqlen_flux.services import CleanupPlanningService
+
+    if getattr(args, "apply", False):
+        result = CleanupPlanningService().result(
+            status=Status.FAILED,
+            error="Apply mode is not supported for cleanup planning. Cleanup is planned-only at this stage.",
+        )
+        print(_render_result(result))
+        return 1
+
+    candidates = build_fake_cleanup_candidates()
+
+    policy_kwargs: dict[str, Any] = {
+        "name": "cli_cleanup_v1",
+        "version": "1",
+        "description": "CLI cleanup planning policy.",
+    }
+    if getattr(args, "allow_delete_planning", False):
+        policy_kwargs["allow_delete_planning"] = True
+    if getattr(args, "min_age_days", None) is not None:
+        policy_kwargs["min_age_days"] = args.min_age_days
+
+    policy = CleanupPolicy(**policy_kwargs)
+
+    result = CleanupPlanningService().plan_cleanup(candidates, policy=policy)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _resolve_provider(kind: str):
     if kind == "fake":
         return FakeSearchProvider(
@@ -867,6 +913,28 @@ def _render_result(result: FluxResult) -> str:
         planned_changes = result.summary.get("planned_changes")
         if planned_changes is not None:
             lines.append(f"planned: {planned_changes}")
+    if result.operation == "cleanup":
+        candidate_count = result.summary.get("candidate_count")
+        if candidate_count is not None:
+            lines.append(f"candidates: {candidate_count}")
+        keep_count = result.summary.get("keep_count")
+        if keep_count is not None:
+            lines.append(f"keep: {keep_count}")
+        review_count = result.summary.get("review_count")
+        if review_count is not None:
+            lines.append(f"review: {review_count}")
+        mark_delete = result.summary.get("mark_delete_eligible_count")
+        if mark_delete is not None:
+            lines.append(f"mark-delete-eligible: {mark_delete}")
+        plan_delete = result.summary.get("plan_delete_count")
+        if plan_delete is not None:
+            lines.append(f"plan-delete: {plan_delete}")
+        none_count = result.summary.get("none_count")
+        if none_count is not None:
+            lines.append(f"none: {none_count}")
+        total_bytes = result.summary.get("total_planned_bytes")
+        if total_bytes is not None:
+            lines.append(f"planned-bytes: {total_bytes}")
     return "\n".join(lines)
 
 
