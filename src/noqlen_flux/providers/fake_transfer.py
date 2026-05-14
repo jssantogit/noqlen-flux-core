@@ -3,7 +3,12 @@ from __future__ import annotations
 import uuid
 
 from noqlen_flux.providers.base import TransferProvider
-from noqlen_flux.search import ProviderHealth
+from noqlen_flux.providers.status import (
+    ProviderAvailability,
+    ProviderCapability,
+    ProviderHealth,
+    ProviderKind,
+)
 from noqlen_flux.transfers import (
     QueueItem,
     QueuePlan,
@@ -20,16 +25,25 @@ class FakeTransferProvider(TransferProvider):
     Simulates queue planning and status without network, filesystem, or real downloads.
     """
 
+    _TRANSFER_CAPABILITIES: list[ProviderCapability] = [
+        ProviderCapability.DOWNLOAD_PLANNING,
+        ProviderCapability.QUEUE_PLANNING,
+        ProviderCapability.TRANSFER_STATUS,
+        ProviderCapability.HEALTH,
+    ]
+
     def __init__(
         self,
         *,
         name: str = "fake-transfer",
-        available: bool = True,
+        kind: ProviderKind = ProviderKind.FAKE,
+        availability: ProviderAvailability = ProviderAvailability.AVAILABLE,
         status_message: str | None = None,
         simulate_failures: bool = False,
     ) -> None:
         self._name = name
-        self._available = available
+        self._kind = kind
+        self._availability = availability
         self._status_message = status_message
         self._simulate_failures = simulate_failures
         self._plans: dict[str, QueuePlan] = {}
@@ -38,13 +52,28 @@ class FakeTransferProvider(TransferProvider):
     def name(self) -> str:
         return self._name
 
+    def capabilities(self) -> list[ProviderCapability]:
+        return list(self._TRANSFER_CAPABILITIES)
+
     def health(self) -> ProviderHealth:
+        health_warnings: list[str] = []
+        health_errors: list[str] = []
+        status_msg = self._status_message
+
+        if self._availability == ProviderAvailability.DEGRADED:
+            health_warnings.append("provider operating in degraded mode")
+        elif self._availability == ProviderAvailability.UNAVAILABLE:
+            health_errors.append("provider is unavailable")
+            status_msg = status_msg or "provider unreachable"
+
         return ProviderHealth(
             provider=self.name,
-            available=self._available,
-            status_message=self._status_message,
-            warnings=[],
-            errors=[],
+            kind=self._kind,
+            availability=self._availability,
+            status_message=status_msg,
+            capabilities=self.capabilities(),
+            warnings=health_warnings,
+            errors=health_errors,
             metadata={"plan_count": len(self._plans)},
         )
 

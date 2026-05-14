@@ -20,13 +20,30 @@ Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `Downlo
 
 ## Provider Boundary
 
-Provider adapters implement the generic `SearchProvider` contract: `name`, `search(query)`, and `health()`. Core services depend on this contract only. They must not import `slskd`, native Soulseek code, terminal UI code, or provider-specific payloads.
+Provider adapters implement the generic `SearchProvider` and `TransferProvider` contracts through a shared `BaseProvider` interface: `name`, `capabilities()`, and `health()`. Core services depend on these contracts only. They must not import `slskd`, native Soulseek code, terminal UI code, or provider-specific payloads.
 
-The in-memory fake provider is the first adapter. It exists to test search flow offline, including warnings, controlled errors, timeouts, locked files, and album folders with multiple files. It performs no network calls and does not touch the filesystem.
+The in-memory fake providers are the first adapters. They exist to test search and transfer flow offline, including warnings, controlled errors, timeouts, locked files, and album folders with multiple files. They perform no network calls and do not touch the filesystem.
 
-A future `slskd` adapter should live under `providers/slskd` or an equivalent isolated module and translate external data into Flux-owned models. A future `NativeSoulseekProvider` should be able to implement the same contract and replace `slskd` without deep core changes.
+A future `slskd` adapter should live under `providers/slskd` or an equivalent isolated module and translate external data into Flux-owned models. A future `NativeSoulseekProvider` must be able to implement the same contract and replace `slskd` without deep core changes.
 
-Transfer providers implement the generic `TransferProvider` contract: `name`, `health()`, `plan_queue(request)`, and `get_status(queue_item_id)`. The `FakeTransferProvider` is the first implementation for offline tests and demonstrations. A future `SlskdProvider` or `NativeSoulseekProvider` must implement this same contract without requiring core changes.
+## Provider Health And Capabilities
+
+Flux owns generic provider status models that describe availability, capabilities, and operational state without referencing any specific backend:
+
+- `ProviderKind` — classifies the provider type: `fake`, `lab`, `external`, `native`, `unknown`.
+- `ProviderCapability` — declares what a provider can do: `search`, `download_planning`, `queue_planning`, `transfer_status`, `health`, `artifacts`.
+- `ProviderAvailability` — describes operational state: `available`, `degraded`, `unavailable`, `unknown`.
+- `ProviderHealth` — combines kind, availability, capabilities, warnings, errors, and safe metadata into a single health snapshot.
+- `ProviderStatus` — wraps `ProviderHealth` with optional transfer/queue counts and a timestamp.
+- `ProviderCapabilityReport` — lists supported and unsupported capabilities for a given provider.
+
+Core services ask generic providers for `health()` and `capabilities()`. The returned `ProviderHealth` and capability lists are Flux-owned models. A future `slskd` adapter must map its backend status into `ProviderHealth`. A future `NativeSoulseekProvider` must implement the same contract.
+
+`ProviderService` provides service-level inspection, health checks, and capability validation. It accepts any `BaseProvider`, calls the generic contracts, and returns `FluxResult` with structured steps, warnings, errors, and logical artifacts. It does not access the network, download files, create files, or know about `slskd`.
+
+Search providers implement `SearchProvider` (a `BaseProvider` subclass): `name`, `capabilities()`, `health()`, and `search(query)`. Transfer providers implement `TransferProvider` (also a `BaseProvider` subclass): `name`, `capabilities()`, `health()`, `plan_queue(request)`, and `get_status(queue_item_id)`.
+
+The fake providers declare their capabilities and return consistent `ProviderHealth` with `ProviderKind.FAKE`. They support simulating `available`, `degraded`, and `unavailable` states for testing.
 
 ## Candidate Scoring
 
@@ -101,6 +118,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 `DownloadPlanningService` owns download planning. It accepts `DownloadRequest` built from `SearchCandidate` and optional `CandidateScore`, applies `DownloadConstraint` rules, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer.
 
 `TransferPlanningService` owns transfer/queue planning. It accepts `DownloadPlan` from the download planning domain, converts `DownloadItem` objects into `TransferItem` and `QueueItem` objects, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Queue plans are inherently dry-run; real execution will come in a separate future layer with an isolated `TransferProvider` adapter.
+
+`ProviderService` owns provider inspection, health checks, and capability validation. It accepts any `BaseProvider`, calls `health()` and `capabilities()`, and returns `FluxResult` with structured steps, warnings, errors, and logical artifacts. It does not access the network, download files, create files, or know about `slskd`.
 
 ## MusicLab
 

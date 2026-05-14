@@ -107,21 +107,19 @@ class SearchProviderResult:
         return _clean(asdict(self))
 
 
-@dataclass(slots=True, frozen=True)
-class ProviderHealth:
-    provider: str
-    available: bool
-    status_message: str | None = None
-    warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    metadata: SafeMetadata = field(default_factory=dict)
+from .providers.status import ProviderHealth
 
-    def __post_init__(self) -> None:
-        if not self.provider.strip():
-            raise ValueError("provider is required")
-
-    def to_dict(self) -> dict[str, Any]:
-        return _clean(asdict(self))
+__all__ = [
+    "CandidateFile",
+    "DownloadArtifact",
+    "DownloadRequest",
+    "ProviderHealth",
+    "SearchCandidate",
+    "SearchKind",
+    "SearchProviderResult",
+    "SearchQuery",
+    "TransferStatus",
+]
 
 
 @dataclass(slots=True, frozen=True)

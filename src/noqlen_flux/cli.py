@@ -6,10 +6,12 @@ from . import __version__
 from .config import config_from_env
 from .downloads import DownloadConstraint, DownloadIntent, DownloadRequest
 from .providers.fake import FakeSearchProvider
+from .providers.fake_transfer import FakeTransferProvider
+from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ReportService, SearchService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, ReportService, SearchService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -156,6 +158,17 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_plan_fake_album.add_argument("--score", action="store_true", help="Include pre-download scoring")
     transfer_plan_fake_album.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
     transfer_plan_fake_album.set_defaults(func=run_transfer_plan_fake_album)
+
+    provider = subparsers.add_parser("provider", help="Inspect provider health and capabilities")
+    provider_subparsers = provider.add_subparsers(dest="provider_command")
+
+    provider_inspect = provider_subparsers.add_parser("inspect", help="Inspect provider health and capabilities")
+    provider_inspect.add_argument("provider_kind", choices=["fake", "fake-transfer"], help="Provider to inspect")
+    provider_inspect.set_defaults(func=run_provider_inspect)
+
+    provider_health = provider_subparsers.add_parser("health", help="Check provider health status")
+    provider_health.add_argument("provider_kind", choices=["fake", "fake-transfer"], help="Provider to check")
+    provider_health.set_defaults(func=run_provider_health)
 
     return parser
 
@@ -374,6 +387,37 @@ def run_transfer_plan_fake_album(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_provider_inspect(args: argparse.Namespace) -> int:
+    provider = _resolve_provider(args.provider_kind)
+    result = ProviderService().inspect_provider(provider)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_provider_health(args: argparse.Namespace) -> int:
+    provider = _resolve_provider(args.provider_kind)
+    result = ProviderService().check_provider_health(provider)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def _resolve_provider(kind: str):
+    if kind == "fake":
+        return FakeSearchProvider(
+            _demo_candidates(),
+            name="fake",
+            kind=ProviderKind.FAKE,
+            availability=ProviderAvailability.AVAILABLE,
+        )
+    if kind == "fake-transfer":
+        return FakeTransferProvider(
+            name="fake-transfer",
+            kind=ProviderKind.FAKE,
+            availability=ProviderAvailability.AVAILABLE,
+        )
+    raise ValueError(f"unknown provider kind: {kind}")
+
+
 def _extract_download_plan(result: FluxResult):
     from noqlen_flux.downloads import DownloadItem, DownloadPlan
 
@@ -431,33 +475,35 @@ def _scoring_service(args: argparse.Namespace) -> CandidateScoringService | None
 
 
 def _demo_fake_provider() -> FakeSearchProvider:
-    return FakeSearchProvider(
-        [
-            SearchCandidate(
-                candidate_id="fake-track-example",
-                provider="fake",
-                username="fake-user",
-                directory="Example Artist/Example Track",
-                artist="Example Artist",
-                title="Example Track",
-                raw_score=1.0,
-                files=[CandidateFile(filename="Example Track.flac", extension="flac", size_bytes=12345678)],
-            ),
-            SearchCandidate(
-                candidate_id="fake-album-example",
-                provider="fake",
-                username="fake-user",
-                directory="Example Artist/Example Album",
-                artist="Example Artist",
-                album="Example Album",
-                raw_score=1.0,
-                files=[
-                    CandidateFile(filename="01 Example Album Intro.flac", extension="flac", size_bytes=1111111),
-                    CandidateFile(filename="02 Example Album Track.flac", extension="flac", size_bytes=2222222),
-                ],
-            ),
-        ]
-    )
+    return FakeSearchProvider(_demo_candidates())
+
+
+def _demo_candidates() -> list[SearchCandidate]:
+    return [
+        SearchCandidate(
+            candidate_id="fake-track-example",
+            provider="fake",
+            username="fake-user",
+            directory="Example Artist/Example Track",
+            artist="Example Artist",
+            title="Example Track",
+            raw_score=1.0,
+            files=[CandidateFile(filename="Example Track.flac", extension="flac", size_bytes=12345678)],
+        ),
+        SearchCandidate(
+            candidate_id="fake-album-example",
+            provider="fake",
+            username="fake-user",
+            directory="Example Artist/Example Album",
+            artist="Example Artist",
+            album="Example Album",
+            raw_score=1.0,
+            files=[
+                CandidateFile(filename="01 Example Album Intro.flac", extension="flac", size_bytes=1111111),
+                CandidateFile(filename="02 Example Album Track.flac", extension="flac", size_bytes=2222222),
+            ],
+        ),
+    ]
 
 
 def _exit_code(status: Status) -> int:

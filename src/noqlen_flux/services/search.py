@@ -3,7 +3,8 @@ from __future__ import annotations
 from noqlen_flux.providers.base import SearchProvider
 from noqlen_flux.results import Artifact, FluxError, FluxResult, FluxWarning, Status
 from noqlen_flux.scoring import ScoringProfile
-from noqlen_flux.search import ProviderHealth, SearchProviderResult, SearchQuery
+from noqlen_flux.providers.status import ProviderAvailability, ProviderHealth
+from noqlen_flux.search import SearchProviderResult, SearchQuery
 from noqlen_flux.services.base import FluxService
 from noqlen_flux.services.scoring import CandidateScoringService
 
@@ -65,7 +66,11 @@ class SearchService(FluxService):
         health = provider.health()
         warnings = _warnings(health.warnings)
         errors = _errors(health.errors)
-        status = Status.FAILED if not health.available or errors else (Status.WARNING if warnings else Status.SUCCESS)
+        status = (
+            Status.FAILED
+            if health.availability == ProviderAvailability.UNAVAILABLE or errors
+            else (Status.WARNING if warnings else Status.SUCCESS)
+        )
         step = self.step("provider-health", status, _health_message(health), warnings=warnings, errors=errors)
         result = FluxResult(
             operation="provider-health",
@@ -100,7 +105,7 @@ def _search_message(provider_result: SearchProviderResult) -> str:
 
 
 def _health_message(health: ProviderHealth) -> str:
-    state = "available" if health.available else "unavailable"
+    state = health.availability.value
     if health.status_message:
         return f"Provider {health.provider} is {state}: {health.status_message}"
     return f"Provider {health.provider} is {state}"

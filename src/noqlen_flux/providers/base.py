@@ -2,42 +2,42 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from noqlen_flux.search import ProviderHealth, SearchProviderResult, SearchQuery
+from noqlen_flux.providers.status import ProviderCapability, ProviderHealth
+from noqlen_flux.search import SearchProviderResult, SearchQuery
 from noqlen_flux.transfers import QueuePlan, TransferRequest, TransferStatus
 
 
-class SearchProvider(ABC):
-    """Generic search provider contract for Flux services."""
+class BaseProvider(ABC):
+    """Common base contract for all Flux providers."""
 
     @property
     @abstractmethod
     def name(self) -> str:
         raise NotImplementedError
+
+    @abstractmethod
+    def capabilities(self) -> list[ProviderCapability]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def health(self) -> ProviderHealth:
+        raise NotImplementedError
+
+
+class SearchProvider(BaseProvider):
+    """Generic search provider contract for Flux services."""
 
     @abstractmethod
     def search(self, query: SearchQuery) -> SearchProviderResult:
         raise NotImplementedError
 
-    @abstractmethod
-    def health(self) -> ProviderHealth:
-        raise NotImplementedError
 
-
-class TransferProvider(ABC):
+class TransferProvider(BaseProvider):
     """Generic transfer provider contract for Flux services.
 
     Implementations (e.g. future SlskdProvider, NativeSoulseekProvider)
     must fulfill this contract without requiring core changes.
     """
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        raise NotImplementedError
-
-    @abstractmethod
-    def health(self) -> ProviderHealth:
-        raise NotImplementedError
 
     @abstractmethod
     def plan_queue(self, request: TransferRequest) -> QueuePlan:

@@ -4,6 +4,7 @@ from .base import FluxService
 from .doctor import DoctorService
 from .downloads import DownloadPlanningService
 from .musiclab import MusicLabService
+from .providers import ProviderService
 from .reports import ReportService
 from .scoring import CandidateScoringService
 from .search import SearchService
@@ -16,6 +17,7 @@ __all__ = [
     "DownloadPlanningService",
     "FluxService",
     "MusicLabService",
+    "ProviderService",
     "ReportService",
     "SearchService",
     "TransferPlanningService",

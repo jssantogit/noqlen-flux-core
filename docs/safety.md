@@ -57,6 +57,16 @@ MusicLab session and fixture identifiers are restricted to safe basename-like va
 
 MusicLab applies the same workspace containment, symlink escape blocking, and protected-root checks as other Flux services. A symlink that would move MusicLab state outside the workspace is rejected before directory creation or fixture writing.
 
+## Provider Health And Capabilities
+
+Health and status checks must not perform downloads, create files, or access the network on their own. `ProviderService` calls only the generic `health()` and `capabilities()` contracts on providers and returns structured results.
+
+Provider status must not expose secrets, tokens, credentials, private paths, or raw backend payloads. `ProviderHealth.metadata` is safe metadata only; sensitive keys are redacted during serialization.
+
+Automated tests must use fake providers. Real network health checks belong only in provider adapters and must be separately tested and sandboxed in a future layer.
+
+`ProviderHealth` and `ProviderStatus` are Flux-owned models. A future `slskd` adapter must translate its backend status into these models without leaking internal slskd structures. A future `NativeSoulseekProvider` must implement the same contract.
+
 ## Search Providers
 
 Automated search tests must use fake providers or controlled fixtures. Real network access, real `slskd`, native Soulseek sessions, credentials, live provider APIs, and real downloads are prohibited in automated search tests.

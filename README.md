@@ -23,6 +23,8 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Download planning models and services that transform candidates into structured plans without executing transfers.
 - Transfer and queue planning models and services that transform download plans into structured queue plans without executing transfers.
 - Generic `TransferProvider` contract for future provider adapters (slskd, NativeSoulseekProvider).
+- Provider health, capabilities, and status models with a generic `BaseProvider` interface.
+- `ProviderService` for inspecting provider health and validating capabilities without network access.
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -159,3 +161,21 @@ noqlen-flux transfer plan fake album --artist "Example Artist" --album "Example 
 Planning supports priority selection via `--priority` (low, normal, high) and optional pre-download scoring via `--score`. These affect only the plan, never execution.
 
 There is no real transfer, no network access, no `slskd`, no filesystem write, and no music library interaction. Real execution will come in a separate future commit with an isolated `TransferProvider` adapter.
+
+## Provider Health And Capabilities Foundation
+
+Flux owns generic provider status models that describe availability, capabilities, and operational state without referencing any specific backend. All providers implement a shared `BaseProvider` contract: `name`, `capabilities()`, and `health()`.
+
+Inspect a fake search provider:
+
+```bash
+noqlen-flux provider inspect fake
+```
+
+Check fake provider health:
+
+```bash
+noqlen-flux provider health fake
+```
+
+The fake providers declare their capabilities and return consistent `ProviderHealth` with explicit availability states (`available`, `degraded`, `unavailable`). There is no real provider yet. `slskd` is a future adapter that must map its backend status into Flux `ProviderHealth`. A future `NativeSoulseekProvider` will implement the same contract.

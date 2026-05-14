@@ -1,5 +1,6 @@
 import pytest
 
+from noqlen_flux.providers.status import ProviderAvailability, ProviderKind
 from noqlen_flux.search import (
     CandidateFile,
     DownloadArtifact,
@@ -74,9 +75,14 @@ def test_search_provider_result_timeout_warnings_errors() -> None:
 
 
 def test_provider_health_basic() -> None:
-    health = ProviderHealth(provider="fake", available=True, status_message="ready")
+    health = ProviderHealth(
+        provider="fake",
+        kind=ProviderKind.FAKE,
+        availability=ProviderAvailability.AVAILABLE,
+        status_message="ready",
+    )
 
-    assert health.to_dict()["available"] is True
+    assert health.to_dict()["availability"] == "available"
     assert health.to_dict()["status_message"] == "ready"
 
 

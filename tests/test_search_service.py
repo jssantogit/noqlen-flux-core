@@ -1,7 +1,8 @@
 from noqlen_flux.providers.base import SearchProvider
 from noqlen_flux.providers.fake import FakeSearchProvider
+from noqlen_flux.providers.status import ProviderAvailability, ProviderHealth
 from noqlen_flux.results import Status
-from noqlen_flux.search import CandidateFile, ProviderHealth, SearchCandidate, SearchKind, SearchProviderResult, SearchQuery
+from noqlen_flux.search import CandidateFile, SearchCandidate, SearchKind, SearchProviderResult, SearchQuery
 from noqlen_flux.services.search import SearchService
 
 
@@ -57,11 +58,16 @@ def test_search_service_depends_on_generic_provider_contract() -> None:
         def name(self) -> str:
             return "inline"
 
+        def capabilities(self) -> list:
+            from noqlen_flux.providers.status import ProviderCapability
+
+            return [ProviderCapability.SEARCH, ProviderCapability.HEALTH]
+
         def search(self, query: SearchQuery) -> SearchProviderResult:
             return SearchProviderResult(provider=self.name, query=query, candidates=[_track_candidate(provider=self.name)])
 
         def health(self) -> ProviderHealth:
-            return ProviderHealth(provider=self.name, available=True)
+            return ProviderHealth(provider=self.name, availability=ProviderAvailability.AVAILABLE)
 
     service = SearchService()
     query = SearchQuery(kind=SearchKind.TRACK, artist="Example Artist", title="Example Track")
@@ -80,7 +86,7 @@ def test_search_service_provider_health() -> None:
 
     assert result.status == Status.SUCCESS
     assert result.summary["provider"] == "fake"
-    assert result.summary["available"] is True
+    assert result.summary["availability"] == "available"
 
 
 def _track_candidate(provider: str = "fake") -> SearchCandidate:
