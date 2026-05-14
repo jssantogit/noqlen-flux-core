@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 
 from . import __version__
+from .results import FluxResult, Status
+from .services import DoctorService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,8 +22,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_doctor(_args: argparse.Namespace) -> int:
-    print("Noqlen Flux Core bootstrap: OK")
-    print("Network, downloads, imports, cleanup, and library writes are not implemented.")
+    result = DoctorService().run()
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def _render_result(result: FluxResult) -> str:
+    lines = [f"Noqlen Flux Core {result.operation}: {result.status.value}"]
+    lines.extend(step.message for step in result.steps if step.message)
+    return "\n".join(lines)
+
+
+def _exit_code(status: Status) -> int:
+    if status == Status.FAILED:
+        return 1
     return 0
 
 

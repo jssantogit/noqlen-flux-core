@@ -14,6 +14,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 
 - A minimal Python package named `noqlen_flux`.
 - A public future CLI entry point named `noqlen-flux`.
+- Initial structured result contracts and a service-first base.
 - Safe stub commands only.
 
 No operation currently touches a real music library or downloads music.
