@@ -19,6 +19,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Safe JSON and text report artifact generation from structured service results.
 - An isolated MusicLab foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration.
 - Generic search domain models, provider contracts, and an in-memory fake provider for offline search-flow tests.
+- Explainable pre-download candidate scoring models and services using Flux-owned search candidates.
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -97,3 +98,21 @@ noqlen-flux search fake album --artist "Example Artist" --album "Example Album"
 ```
 
 The fake provider is for tests and demonstrations only. `slskd` is not implemented yet and must remain isolated as a future external provider adapter, replaceable by a future native Soulseek provider without rewriting the core service layer.
+
+## Candidate Scoring Foundation
+
+Candidate scoring is a separate Flux domain. Providers return `SearchCandidate` objects; scoring assigns explainable pre-download `CandidateRisk` values, component scores, reasons, penalties, and warnings.
+
+Run a fake track search with scoring:
+
+```bash
+noqlen-flux search fake track --artist "Example Artist" --title "Example Track" --score
+```
+
+Run a fake album search with scoring:
+
+```bash
+noqlen-flux search fake album --artist "Example Artist" --album "Example Album" --score
+```
+
+This is not real audio quality analysis. Flux still has no real `slskd` integration, native Soulseek provider, real download, queue, transfer, routing, quarantine, cleanup, or music library write behavior.

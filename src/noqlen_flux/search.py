@@ -81,8 +81,6 @@ class SearchCandidate:
             raise ValueError("candidate_id is required")
         if not self.provider.strip():
             raise ValueError("provider is required")
-        if not self.files:
-            raise ValueError("at least one candidate file is required")
 
     def to_dict(self) -> dict[str, Any]:
         return _clean(asdict(self))

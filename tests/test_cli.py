@@ -79,6 +79,24 @@ def test_search_fake_album_works(capsys) -> None:
     assert "Provider fake returned 1 candidate(s)" in output
 
 
+def test_search_fake_track_with_score_works(capsys) -> None:
+    assert main(["search", "fake", "track", "--artist", "Example Artist", "--title", "Example Track", "--score"]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "score: fake-track-example" in output
+    assert "risk=low" in output
+
+
+def test_search_fake_album_with_score_works(capsys) -> None:
+    assert main(["search", "fake", "album", "--artist", "Example Artist", "--album", "Example Album", "--score"]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "score: fake-album-example" in output
+    assert "risk=low" in output
+
+
 def test_musiclab_inspect_works(tmp_path, capsys) -> None:
     workspace = tmp_path / "flux-workspace"
 

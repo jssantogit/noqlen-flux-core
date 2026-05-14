@@ -8,7 +8,7 @@ from .providers.fake import FakeSearchProvider
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import DoctorService, MusicLabService, ReportService, SearchService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, MusicLabService, ReportService, SearchService, WorkspaceService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,12 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     search_fake_track.add_argument("--artist", required=True, help="Artist name")
     search_fake_track.add_argument("--title", required=True, help="Track title")
     search_fake_track.add_argument("--limit", type=int, help="Optional positive result limit")
+    search_fake_track.add_argument("--score", action="store_true", help="Include explainable pre-download scoring")
     search_fake_track.set_defaults(func=run_search_fake_track)
 
     search_fake_album = search_fake_subparsers.add_parser("album", help="Search a fake album candidate")
     search_fake_album.add_argument("--artist", required=True, help="Artist name")
     search_fake_album.add_argument("--album", required=True, help="Album title")
     search_fake_album.add_argument("--limit", type=int, help="Optional positive result limit")
+    search_fake_album.add_argument("--score", action="store_true", help="Include explainable pre-download scoring")
     search_fake_album.set_defaults(func=run_search_fake_album)
 
     musiclab = subparsers.add_parser("musiclab", help="Inspect or initialize isolated MusicLab calibration state")
@@ -138,14 +140,14 @@ def run_report_demo(args: argparse.Namespace) -> int:
 
 def run_search_fake_track(args: argparse.Namespace) -> int:
     query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title, limit=args.limit)
-    result = SearchService().search(query, _demo_fake_provider())
+    result = SearchService().search(query, _demo_fake_provider(), _scoring_service(args))
     print(_render_result(result))
     return _exit_code(result.status)
 
 
 def run_search_fake_album(args: argparse.Namespace) -> int:
     query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album, limit=args.limit)
-    result = SearchService().search(query, _demo_fake_provider())
+    result = SearchService().search(query, _demo_fake_provider(), _scoring_service(args))
     print(_render_result(result))
     return _exit_code(result.status)
 
@@ -194,7 +196,17 @@ def _render_result(result: FluxResult) -> str:
     lines.extend(f"planned: {change.action} {change.target}" for change in result.planned_changes)
     lines.extend(f"applied: {change.action} {change.target}" for change in result.applied_changes)
     lines.extend(f"error: {error.code}: {error.message}" for error in result.errors)
+    lines.extend(
+        f"score: {score['candidate_id']} total={score['total']}/{score['max_score']} risk={score['risk']}"
+        for score in result.summary.get("scores", [])
+    )
     return "\n".join(lines)
+
+
+def _scoring_service(args: argparse.Namespace) -> CandidateScoringService | None:
+    if getattr(args, "score", False):
+        return CandidateScoringService()
+    return None
 
 
 def _demo_fake_provider() -> FakeSearchProvider:

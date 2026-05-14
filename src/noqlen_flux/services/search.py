@@ -2,23 +2,37 @@ from __future__ import annotations
 
 from noqlen_flux.providers.base import SearchProvider
 from noqlen_flux.results import Artifact, FluxError, FluxResult, FluxWarning, Status
+from noqlen_flux.scoring import ScoringProfile
 from noqlen_flux.search import ProviderHealth, SearchProviderResult, SearchQuery
 from noqlen_flux.services.base import FluxService
+from noqlen_flux.services.scoring import CandidateScoringService
 
 
 class SearchService(FluxService):
     operation = "search"
 
-    def search(self, query: SearchQuery, provider: SearchProvider) -> FluxResult:
+    def search(
+        self,
+        query: SearchQuery,
+        provider: SearchProvider,
+        scoring_service: CandidateScoringService | None = None,
+        scoring_profile: ScoringProfile | None = None,
+    ) -> FluxResult:
         provider_result = provider.search(query)
         warnings = _warnings(provider_result.warnings)
         errors = _errors(provider_result.errors)
         status = _status(warnings, errors, provider_result.timeout_reached)
         candidate_payload = [candidate.to_dict() for candidate in provider_result.candidates]
+        score_payload = []
+        if scoring_service is not None and not errors:
+            score_payload = [
+                scoring_service.score_candidate(query, candidate, scoring_profile).to_dict()
+                for candidate in provider_result.candidates
+            ]
         artifact = Artifact(
             kind="search-candidates",
             description="Logical search candidate result set",
-            metadata={"provider": provider_result.provider, "candidates": candidate_payload},
+            metadata={"provider": provider_result.provider, "candidates": candidate_payload, "scores": score_payload},
         )
         step = self.step(
             "provider-search",
@@ -42,6 +56,7 @@ class SearchService(FluxService):
                 "response_count": provider_result.response_count,
                 "timeout_reached": provider_result.timeout_reached,
                 "candidates": candidate_payload,
+                "scores": score_payload,
             },
         )
         return result.finish()

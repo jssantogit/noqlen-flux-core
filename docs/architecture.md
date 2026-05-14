@@ -26,6 +26,16 @@ The in-memory fake provider is the first adapter. It exists to test search flow 
 
 A future `slskd` adapter should live under `providers/slskd` or an equivalent isolated module and translate external data into Flux-owned models. A future `NativeSoulseekProvider` should be able to implement the same contract and replace `slskd` without deep core changes.
 
+## Candidate Scoring
+
+Candidate scoring is a separate core domain from providers. Providers return `SearchCandidate` objects; `CandidateScoringService` scores those candidates with Flux-owned models such as `CandidateScore`, `ScoreComponent`, `ScoreReason`, `ScorePenalty`, `ScoringProfile`, and `ScoringResult`.
+
+Scoring is explainable and calibrable. Every score should be backed by components, reasons, penalties, warnings, and a profile such as `default_v1`, so future MusicLab calibration can tune weights and thresholds without coupling core services to any provider implementation.
+
+`CandidateRisk` is a pre-download risk signal, not a `QualityGrade`. It can highlight weak textual matches, locked files, missing file declarations, or suspicious pre-download terms, but it does not measure real audio quality and must not perform final routing, approval, rejection, quarantine, cleanup, or deletion.
+
+The core remains provider-neutral. A future `slskd` provider or `NativeSoulseekProvider` must translate provider output into `SearchCandidate`; scoring must continue to depend on Flux models rather than external provider internals.
+
 ## Result Contracts
 
 Flux services return structured `FluxResult` objects composed of statuses, steps, warnings, errors, artifacts, planned changes, applied changes, summaries, and timestamps. These contracts are serializable with safe `to_dict()` and `to_json()` methods so future controllers can consume data without scraping terminal output.
@@ -41,6 +51,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 `MusicLabService` owns the isolated calibration lab under `workspace/musiclab`. It validates the lab layout, plans or creates MusicLab directories, creates safe sessions, and writes only controlled fake fixtures. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, and `Artifact` objects; it does not print, parse CLI arguments, access providers, create audio, call the network, or touch a real music library.
 
 `SearchService` owns the service-first search flow. It accepts a `SearchQuery` and any `SearchProvider`, calls the provider contract, and returns a `FluxResult` with steps, warnings, errors, summary data, and logical candidate artifacts. It does not download, create files, score quality, access the network, or know whether the provider is fake, `slskd`, or native Soulseek.
+
+`CandidateScoringService` owns pre-download candidate scoring. It accepts `SearchQuery` and `SearchCandidate` data, returns structured scores, and can be invoked by `SearchService` only as an optional collaborator. It does not call providers, download files, create files, inspect audio, or know anything about `slskd`.
 
 ## MusicLab
 
@@ -64,7 +76,7 @@ Report CLI commands are adapters over `ReportService`: `report demo --workspace 
 
 MusicLab CLI commands are adapters over `MusicLabService`: `musiclab inspect`, `musiclab init`, `musiclab session create`, and `musiclab fixture create` parse arguments, call the service, render the result, and choose the process exit code. Default behavior remains dry-run unless `--apply` is explicit.
 
-Search CLI commands are adapters over `SearchService`: `search fake track` and `search fake album` build `SearchQuery` objects, instantiate only the safe in-memory fake provider, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement provider logic or download behavior.
+Search CLI commands are adapters over `SearchService`: `search fake track` and `search fake album` build `SearchQuery` objects, instantiate only the safe in-memory fake provider, optionally attach `CandidateScoringService` for `--score`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement provider logic, scoring logic, or download behavior.
 
 ## Future Controllers
 
