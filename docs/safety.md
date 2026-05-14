@@ -112,7 +112,7 @@ Automated tests must use fake providers. Real network health checks belong only 
 The `SlskdProvider` adapter under `providers/slskd.py` is an external adapter, not Flux core.
 
 - Slskd adapter tests must use fake payloads and `FakeSlskdClient` only. No real slskd network access is permitted in automated tests.
-- slskd network access is disabled by default (`allow_network=false`). Health checks require explicit opt-in.
+- slskd search network access is disabled by default (`allow_network=false`). Real search requires explicit opt-in.
 - Bounded polling is required: `max_poll_attempts` limits the number of state checks. No infinite loops are permitted.
 - `SlskdProviderConfig.api_key` is redacted in `to_dict()` and `__repr__()`. It must never appear in logs, artifacts, or test output.
 - API keys must be provided via environment variable (`--api-key-env`), not as literal CLI arguments.
@@ -120,9 +120,11 @@ The `SlskdProvider` adapter under `providers/slskd.py` is an external adapter, n
 - No raw provider payload, secrets, private paths, lyrics, or fingerprints should leak through the adapter.
 - Core services must not import `providers.slskd`. They depend on generic contracts only.
 - Without an injected client and without `allow_network`, `SlskdProvider` returns `UNAVAILABLE` with "network access disabled".
-- `SlskdHttpClient` uses only `urllib.request` (standard library). It supports health checks only; search, download, queue, and transfer are not implemented.
+- `SlskdHttpClient` uses only `urllib.request` (standard library). It supports health checks and search operations. Search endpoint paths must be confirmed against the actual slskd version before production use.
 - Client errors during polling, start, or response retrieval produce controlled `SearchProviderResult.errors`, not raw exceptions.
 - Network errors from `SlskdHttpClient` do not leak tokens, headers, or raw response content.
+- Search never downloads files, creates files, or writes to the filesystem.
+- Download, queue, and transfer are not implemented in this adapter.
 
 ## Search Providers
 

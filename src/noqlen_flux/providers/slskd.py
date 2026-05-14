@@ -213,25 +213,23 @@ class FakeSlskdClient:
 
 
 class SlskdHttpClient:
-    """Optional real HTTP client for slskd health checks.
+    """Optional real HTTP client for slskd search and health.
 
     Uses only the Python standard library (urllib.request).
     Network access must be explicitly allowed via config.
     API keys are never exposed in error messages or metadata.
 
-    This client is intentionally minimal: health check only.
-    Search, download, queue, and transfer are NOT implemented here.
+    NOTE: The exact slskd API endpoint paths below are based on
+    common slskd API patterns and must be confirmed against the
+    actual slskd version in use before production deployment.
+    The client structure is isolated and testable via fake transport.
     """
 
     def __init__(self, config: SlskdProviderConfig) -> None:
         self._config = config
 
     def health_check(self) -> dict[str, Any]:
-        """Perform a real health check against the slskd API.
-
-        Returns a dict with 'status' and optional metadata.
-        Network errors are converted to controlled error dicts.
-        """
+        """Perform a real health check against the slskd API."""
         base_url = self._config.base_url
         if not base_url:
             return {"status": "error", "message": "no base_url configured"}
@@ -256,20 +254,228 @@ class SlskdHttpClient:
             return {"status": "error", "message": f"slskd unreachable: {reason}"}
         except TimeoutError:
             return {"status": "error", "message": "slskd health check timed out"}
-        except OSError as exc:
-            return {"status": "error", "message": f"slskd network error"}
+        except OSError:
+            return {"status": "error", "message": "slskd network error"}
 
     def start_search(self, query_text: str) -> str:
-        raise NotImplementedError("real search is not implemented in this commit")
+        """Start a search and return the search ID.
+
+        Endpoint path must be confirmed against actual slskd API.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            raise RuntimeError("slskd client: no base_url configured")
+
+        url = f"{base_url.rstrip('/')}/api/v1/searches"
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        body = json.dumps({"text": query_text}).encode("utf-8")
+        req = Request(url, data=body, headers=headers, method="POST")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds) as resp:
+                raw = resp.read()
+                data = json.loads(raw)
+                search_id = data.get("id") or data.get("searchId")
+                if not search_id:
+                    raise RuntimeError("slskd client: search started but no ID returned")
+                return str(search_id)
+        except URLError as exc:
+            reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+            raise RuntimeError(f"slskd client: search start failed: {reason}") from exc
+        except TimeoutError:
+            raise RuntimeError("slskd client: search start timed out") from None
+        except OSError as exc:
+            raise RuntimeError("slskd client: search start network error") from exc
 
     def get_search_state(self, search_id: str) -> dict[str, Any]:
-        raise NotImplementedError("real search is not implemented in this commit")
+        """Return the current state of a search.
+
+        Endpoint path must be confirmed against actual slskd API.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            raise RuntimeError("slskd client: no base_url configured")
+
+        url = f"{base_url.rstrip('/')}/api/v1/searches/{_url_quote(search_id)}"
+        headers: dict[str, str] = {}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        req = Request(url, headers=headers, method="GET")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds) as resp:
+                raw = resp.read()
+                data = json.loads(raw)
+                state = data.get("state") or data.get("status")
+                if not state:
+                    return {"state": SearchState.UNKNOWN.value, "raw": _safe_summary(data)}
+                return {"state": str(state)}
+        except URLError as exc:
+            reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+            raise RuntimeError(f"slskd client: state check failed: {reason}") from exc
+        except TimeoutError:
+            raise RuntimeError("slskd client: state check timed out") from None
+        except OSError as exc:
+            raise RuntimeError("slskd client: state check network error") from exc
 
     def get_search_responses(self, search_id: str) -> dict[str, Any]:
-        raise NotImplementedError("real search is not implemented in this commit")
+        """Return the collected search responses.
+
+        Endpoint path must be confirmed against actual slskd API.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            raise RuntimeError("slskd client: no base_url configured")
+
+        url = f"{base_url.rstrip('/')}/api/v1/searches/{_url_quote(search_id)}/responses"
+        headers: dict[str, str] = {}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        req = Request(url, headers=headers, method="GET")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds) as resp:
+                raw = resp.read()
+                data = json.loads(raw)
+                return _normalize_search_responses(data)
+        except URLError as exc:
+            reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+            raise RuntimeError(f"slskd client: response retrieval failed: {reason}") from exc
+        except TimeoutError:
+            raise RuntimeError("slskd client: response retrieval timed out") from None
+        except OSError as exc:
+            raise RuntimeError("slskd client: response retrieval network error") from exc
 
     def stop_search(self, search_id: str) -> None:
-        raise NotImplementedError("real search is not implemented in this commit")
+        """Stop/cancel an ongoing search.
+
+        Endpoint path must be confirmed against actual slskd API.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            return
+
+        url = f"{base_url.rstrip('/')}/api/v1/searches/{_url_quote(search_id)}"
+        headers: dict[str, str] = {}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        req = Request(url, headers=headers, method="DELETE")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds):
+                pass
+        except (URLError, TimeoutError, OSError):
+            pass
+
+
+def _url_quote(value: str) -> str:
+    """URL-safe quote for search IDs."""
+    from urllib.parse import quote
+    return quote(value, safe="")
+
+
+def _safe_summary(data: dict[str, Any], max_keys: int = 5) -> dict[str, Any]:
+    """Return a safe summary of a dict without exposing sensitive data."""
+    summary: dict[str, Any] = {}
+    for i, (k, v) in enumerate(data.items()):
+        if i >= max_keys:
+            break
+        if _is_sensitive_key(k):
+            summary[k] = "[redacted]"
+        elif isinstance(v, (str, int, float, bool)):
+            summary[k] = v
+        elif isinstance(v, list):
+            summary[k] = f"[{len(v)} items]"
+        elif isinstance(v, dict):
+            summary[k] = "{...}"
+        else:
+            summary[k] = str(v)
+    return summary
+
+
+def _is_sensitive_key(key: str) -> bool:
+    """Check if a key looks sensitive."""
+    sensitive_parts = ("key", "token", "secret", "password", "auth", "credential")
+    normalized = key.lower().replace("_", "-")
+    return any(part in normalized for part in sensitive_parts)
+
+
+def _normalize_search_responses(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize raw slskd search response data to Flux-expected format."""
+    if isinstance(data, list):
+        responses = data
+        response_count = len(responses)
+    elif isinstance(data, dict):
+        responses = data.get("responses") or data.get("files") or data.get("results") or []
+        if not isinstance(responses, list):
+            responses = [responses] if responses else []
+        response_count = data.get("responseCount") or data.get("response_count") or len(responses)
+    else:
+        responses = []
+        response_count = 0
+
+    if not isinstance(response_count, int) or response_count < 0:
+        response_count = len(responses)
+
+    normalized_responses = []
+    for r in responses:
+        if not isinstance(r, dict):
+            continue
+        normalized_responses.append(_normalize_single_response(r))
+
+    return {
+        "responses": normalized_responses,
+        "response_count": response_count,
+    }
+
+
+def _normalize_single_response(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a single search response dict."""
+    username = raw.get("username") or raw.get("user") or ""
+    directory = raw.get("directory") or raw.get("path") or raw.get("folder")
+    files = raw.get("files") or raw.get("fileList") or raw.get("file_list") or []
+    locked_files = raw.get("lockedFiles") or raw.get("locked_files") or raw.get("locked") or []
+
+    if not isinstance(files, list):
+        files = [files] if files else []
+    if not isinstance(locked_files, list):
+        locked_files = [locked_files] if locked_files else []
+
+    return {
+        "username": str(username) if username else "",
+        "directory": str(directory) if isinstance(directory, str) else None,
+        "files": [_normalize_file(f) for f in files if isinstance(f, dict)],
+        "locked_files": [_normalize_file(f) for f in locked_files if isinstance(f, dict)],
+    }
+
+
+def _normalize_file(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a single file dict from slskd response."""
+    filename = raw.get("filename") or raw.get("name") or raw.get("file") or ""
+    size = raw.get("size") or raw.get("filesize") or raw.get("file_size")
+    bitrate = raw.get("bitrate") or raw.get("bitRate")
+    extension = raw.get("extension") or raw.get("ext")
+    duration = raw.get("duration") or raw.get("length") or raw.get("time")
+
+    safe_ext = None
+    if isinstance(extension, str) and extension.strip():
+        safe_ext = extension.strip().lstrip(".")
+    elif isinstance(filename, str) and "." in filename:
+        safe_ext = filename.rsplit(".", 1)[-1].lower()
+
+    return {
+        "filename": str(filename) if filename else "",
+        "size": int(size) if isinstance(size, (int, float)) and size >= 0 else None,
+        "bitrate": int(bitrate) if isinstance(bitrate, (int, float)) and bitrate > 0 else None,
+        "extension": safe_ext,
+        "duration": int(duration) if isinstance(duration, (int, float)) and duration >= 0 else None,
+    }
 
 
 class SlskdPayloadMapper:
@@ -505,7 +711,8 @@ class SlskdProvider(SearchProvider):
             )
 
     def search(self, query: SearchQuery) -> SearchProviderResult:
-        if self._client is None:
+        client = self._resolve_client()
+        if client is None:
             return SearchProviderResult(
                 provider=self.name,
                 query=query,
@@ -514,7 +721,7 @@ class SlskdProvider(SearchProvider):
 
         try:
             search_text = self._build_search_text(query)
-            search_id = self._client.start_search(search_text)
+            search_id = client.start_search(search_text)
         except Exception as exc:  # noqa: BLE001
             return SearchProviderResult(
                 provider=self.name,
@@ -526,7 +733,7 @@ class SlskdProvider(SearchProvider):
         timeout_reached = False
 
         try:
-            state, timeout_reached, warnings = self._poll_until_complete(search_id, warnings)
+            state, timeout_reached, warnings = self._poll_until_complete(client, search_id, warnings)
         except Exception as exc:  # noqa: BLE001
             return SearchProviderResult(
                 provider=self.name,
@@ -545,7 +752,7 @@ class SlskdProvider(SearchProvider):
 
         if timeout_reached:
             try:
-                self._client.stop_search(search_id)
+                client.stop_search(search_id)
             except Exception:  # noqa: BLE001
                 pass
             warnings.append("slskd search reached poll limit; results may be incomplete")
@@ -557,7 +764,7 @@ class SlskdProvider(SearchProvider):
             )
 
         try:
-            payload = self._client.get_search_responses(search_id)
+            payload = client.get_search_responses(search_id)
         except Exception as exc:  # noqa: BLE001
             return SearchProviderResult(
                 provider=self.name,
@@ -583,6 +790,16 @@ class SlskdProvider(SearchProvider):
             timeout_reached=timeout_reached,
         )
 
+    def _resolve_client(self) -> SlskdClientProtocol | None:
+        """Resolve the client to use: injected client first, then real HTTP client if allowed."""
+        if self._client is not None:
+            return self._client
+
+        if self._config.allow_network and self._config.base_url:
+            return SlskdHttpClient(self._config)
+
+        return None
+
     def _build_search_text(self, query: SearchQuery) -> str:
         if query.kind == SearchKind.TRACK:
             parts = [query.artist]
@@ -598,6 +815,7 @@ class SlskdProvider(SearchProvider):
 
     def _poll_until_complete(
         self,
+        client: SlskdClientProtocol,
         search_id: str,
         warnings: list[str],
     ) -> tuple[SearchState, bool, list[str]]:
@@ -606,7 +824,7 @@ class SlskdProvider(SearchProvider):
 
         for attempt in range(1, max_attempts + 1):
             try:
-                state_payload = self._client.get_search_state(search_id)
+                state_payload = client.get_search_state(search_id)
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"slskd poll attempt {attempt} failed: {exc}")
                 if attempt == max_attempts:

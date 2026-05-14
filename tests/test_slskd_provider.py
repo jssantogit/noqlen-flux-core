@@ -4,6 +4,8 @@ All tests use fake payloads and fake clients only.
 No network access, no real slskd, no real downloads.
 """
 
+import json
+
 import pytest
 
 from noqlen_flux.providers.base import SearchProvider
@@ -694,19 +696,441 @@ def test_slskd_http_client_does_not_use_external_network_libs() -> None:
     assert "import aiohttp" not in source
 
 
-def test_slskd_http_client_search_raises_not_implemented() -> None:
+def test_slskd_http_client_start_search_no_url_raises() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    with pytest.raises(RuntimeError, match="no base_url"):
+        client.start_search("test")
+
+
+def test_slskd_http_client_get_state_no_url_raises() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    with pytest.raises(RuntimeError, match="no base_url"):
+        client.get_search_state("test")
+
+
+def test_slskd_http_client_get_responses_no_url_raises() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    with pytest.raises(RuntimeError, match="no base_url"):
+        client.get_search_responses("test")
+
+
+def test_slskd_http_client_stop_search_no_url_is_noop() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    client.stop_search("test")
+
+
+def test_slskd_http_client_start_search_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from io import BytesIO
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="test-key")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(b'{"id": "search-abc-123"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    search_id = client.start_search("artist track")
+    assert search_id == "search-abc-123"
+
+
+def test_slskd_http_client_start_search_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="search start failed"):
+        client.start_search("test")
+
+
+def test_slskd_http_client_start_search_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     from noqlen_flux.providers.slskd import SlskdHttpClient
 
     config = SlskdProviderConfig(base_url="http://localhost:5000")
     client = SlskdHttpClient(config=config)
-    with pytest.raises(NotImplementedError):
+
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="search start timed out"):
         client.start_search("test")
-    with pytest.raises(NotImplementedError):
-        client.get_search_state("test")
-    with pytest.raises(NotImplementedError):
-        client.get_search_responses("test")
-    with pytest.raises(NotImplementedError):
-        client.stop_search("test")
+
+
+def test_slskd_http_client_get_search_state_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    state = client.get_search_state("search-123")
+    assert state["state"] == "Completed"
+
+
+def test_slskd_http_client_get_search_responses_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    response_body = json.dumps({
+        "responses": [
+            {
+                "username": "test-user",
+                "directory": "Music/Test",
+                "files": [{"filename": "test.flac", "size": 1000}],
+                "locked_files": [],
+            }
+        ],
+        "response_count": 1,
+    }).encode()
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(response_body)
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.get_search_responses("search-123")
+    assert result["response_count"] == 1
+    assert len(result["responses"]) == 1
+    assert result["responses"][0]["username"] == "test-user"
+
+
+def test_slskd_http_client_stop_search_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse()
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+    client.stop_search("search-123")
+
+
+def test_slskd_http_client_stop_search_error_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("gone")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+    client.stop_search("search-123")
+
+
+def test_slskd_http_client_api_key_not_in_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="super-secret-key-12345")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.start_search("test")
+    assert "super-secret-key-12345" not in str(exc_info.value)
+
+
+def test_slskd_http_client_health_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(b'{"version": "4.5.0"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.health_check()
+    assert result["status"] == "ok"
+    assert result["version"] == "4.5.0"
+
+
+# --- Provider search with allow_network ---
+
+
+def test_provider_search_with_allow_network_no_base_url_returns_error() -> None:
+    config = SlskdProviderConfig(allow_network=True)
+    provider = SlskdProvider(config=config)
+    result = provider.search(_track_query())
+    assert len(result.errors) >= 1
+    assert "no active client" in " ".join(result.errors).lower()
+
+
+def test_provider_search_with_allow_network_and_base_url_uses_real_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(
+        base_url="http://localhost:5000",
+        allow_network=True,
+        max_poll_attempts=3,
+    )
+    provider = SlskdProvider(config=config)
+
+    call_log: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        call_log.append(req.method or "GET")
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(json.dumps(_fake_track_response()).encode())
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = provider.search(_track_query())
+    assert len(result.candidates) == 1
+    assert result.response_count == 1
+    assert "POST" in call_log
+    assert "GET" in call_log
+
+
+def test_provider_search_with_allow_network_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(
+        base_url="http://localhost:5000",
+        allow_network=True,
+        max_poll_attempts=2,
+    )
+    provider = SlskdProvider(config=config)
+
+    poll_count = [0]
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" not in str(req.full_url):
+            poll_count[0] += 1
+            return FakeResponse(b'{"state": "InProgress"}')
+        return FakeResponse(b'{"responses": [], "response_count": 0}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = provider.search(_track_query())
+    assert result.timeout_reached is True
+    assert "poll limit" in " ".join(result.warnings).lower()
+    assert poll_count[0] == 2
+
+
+def test_provider_search_with_allow_network_start_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True)
+    provider = SlskdProvider(config=config)
+
+    from urllib.error import URLError
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = provider.search(_track_query())
+    assert len(result.errors) >= 1
+    assert "search start failed" in " ".join(result.errors).lower()
+
+
+def test_provider_search_with_allow_network_empty_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True, max_poll_attempts=5)
+    provider = SlskdProvider(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(b'{"responses": [], "response_count": 0}')
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = provider.search(_track_query())
+    assert result.candidates == []
+    assert "no candidates" in " ".join(result.warnings).lower()
+
+
+# --- Normalization helpers ---
+
+
+def test_normalize_search_responses_from_list() -> None:
+    from noqlen_flux.providers.slskd import _normalize_search_responses
+
+    data = [
+        {"username": "user1", "files": [{"filename": "a.flac", "size": 100}]},
+    ]
+    result = _normalize_search_responses(data)
+    assert result["response_count"] == 1
+    assert result["responses"][0]["username"] == "user1"
+
+
+def test_normalize_search_responses_from_dict() -> None:
+    from noqlen_flux.providers.slskd import _normalize_search_responses
+
+    data = {
+        "responses": [
+            {"username": "user1", "files": [{"filename": "a.flac", "size": 100}]},
+        ],
+        "response_count": 1,
+    }
+    result = _normalize_search_responses(data)
+    assert result["response_count"] == 1
+
+
+def test_normalize_search_responses_alternative_keys() -> None:
+    from noqlen_flux.providers.slskd import _normalize_search_responses
+
+    data = {
+        "results": [
+            {"user": "user1", "fileList": [{"name": "a.flac", "filesize": 100}]},
+        ],
+    }
+    result = _normalize_search_responses(data)
+    assert result["response_count"] == 1
+    assert result["responses"][0]["username"] == "user1"
+    assert result["responses"][0]["files"][0]["filename"] == "a.flac"
+
+
+def test_normalize_file_extension_from_filename() -> None:
+    from noqlen_flux.providers.slskd import _normalize_file
+
+    raw = {"filename": "01 Track.flac", "size": 1000}
+    result = _normalize_file(raw)
+    assert result["extension"] == "flac"
+
+
+def test_normalize_file_duration_alternative_keys() -> None:
+    from noqlen_flux.providers.slskd import _normalize_file
+
+    raw = {"filename": "track.flac", "length": 240}
+    result = _normalize_file(raw)
+    assert result["duration"] == 240
+
+
+def test_safe_summary_redacts_sensitive_keys() -> None:
+    from noqlen_flux.providers.slskd import _safe_summary
+
+    data = {"username": "user1", "api_key": "secret", "token": "tok"}
+    result = _safe_summary(data)
+    assert result["username"] == "user1"
+    assert result["api_key"] == "[redacted]"
+    assert result["token"] == "[redacted]"
+
+
+def test_url_quote_escapes_special_chars() -> None:
+    from noqlen_flux.providers.slskd import _url_quote
+
+    assert _url_quote("search/123") == "search%2F123"
+    assert _url_quote("safe-id") == "safe-id"
 
 
 # --- allow_network config tests ---
