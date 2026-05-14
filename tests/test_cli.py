@@ -299,3 +299,43 @@ def test_routing_fake_unknown_works(capsys) -> None:
     output = capsys.readouterr().out
     assert "routing: warning" in output
     assert "review: 1" in output
+
+
+def test_staging_fake_approved_works(capsys) -> None:
+    assert main(["staging", "fake", "approved"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging: success" in output
+    assert "staging approved: 1" in output
+
+
+def test_staging_fake_quarantine_works(capsys) -> None:
+    assert main(["staging", "fake", "quarantine"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging: success" in output
+    assert "staging quarantine: 1" in output
+
+
+def test_staging_fake_rejected_works(capsys) -> None:
+    assert main(["staging", "fake", "rejected"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging: success" in output
+    assert "staging rejected: 1" in output
+
+
+def test_staging_fake_delete_eligible_works(capsys) -> None:
+    assert main(["staging", "fake", "delete-eligible"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging: warning" in output
+    assert "staging rejected: 1" in output
+
+
+def test_staging_fake_review_works(capsys) -> None:
+    assert main(["staging", "fake", "review"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging: success" in output
+    assert "staging review: 1" in output

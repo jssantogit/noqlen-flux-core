@@ -10,6 +10,7 @@ from .reports import ReportService
 from .routing import RoutingDecisionService
 from .scoring import CandidateScoringService
 from .search import SearchService
+from .staging import StagingPlanService
 from .transfers import TransferPlanningService
 from .workspace import WorkspaceService
 
@@ -24,6 +25,7 @@ __all__ = [
     "ReportService",
     "RoutingDecisionService",
     "SearchService",
+    "StagingPlanService",
     "TransferPlanningService",
     "WorkspaceService",
 ]

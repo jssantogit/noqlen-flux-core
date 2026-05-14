@@ -27,6 +27,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - `ProviderService` for inspecting provider health and validating capabilities without network access.
 - Post-download quality result contracts and fake simulation service (`QualityGrade`, `QualityFinding`, `QualityResult`, `QualityProfile`, `QualitySummary`).
 - Post-download routing decision contracts and fake planning service (`RoutingOutcome`, `RoutingDecision`, `RoutingPolicy`, `RoutingPlan`).
+- Post-download staging plan contracts and fake planning service (`StagingArea`, `StagingItem`, `StagingPlan`, `StagingPolicy`, `StagingPlanService`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -229,3 +230,27 @@ noqlen-flux routing fake bad-heuristic
 ```
 
 This is not real file routing. Flux still has no file movement, deletion, quarantine execution, or cleanup behavior. All routing decisions are planned-only and use `PlannedChange` objects, never `AppliedChange`. Real execution will come in a separate future commit with explicit apply mode and safety checks.
+
+## Staging Plan Foundation
+
+Post-download staging plan is a separate Flux domain from routing decision. `RoutingDecision` decides the conceptual destination; `StagingPlan` prepares the planned filesystem change. `StagingArea` (`incoming`, `approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`) represents a planned staging destination. It does not move, copy, delete, or quarantine any files.
+
+Plan staging for a fake approved routing outcome:
+
+```bash
+noqlen-flux staging fake approved
+```
+
+Plan staging for a fake quarantine routing outcome:
+
+```bash
+noqlen-flux staging fake quarantine
+```
+
+Plan staging for a fake rejected routing outcome:
+
+```bash
+noqlen-flux staging fake rejected
+```
+
+This is not real file staging. Flux still has no file movement, deletion, copy, quarantine execution, or cleanup behavior. All staging plans are planned-only and use `PlannedChange` objects, never `AppliedChange`. `delete_eligible` does not mean deletion has occurred. Real execution will come in a separate future commit with explicit apply mode and safety checks.

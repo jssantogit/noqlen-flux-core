@@ -165,6 +165,37 @@ Routing contracts must not expose:
 
 `RoutingPolicy` is versioned so MusicLab can calibrate routing thresholds before any real provider or file execution is active. The default policy declares `stage: post-download`, `status: contracts-only`, and `allow_delete_eligible: false`.
 
+## Staging Plans
+
+Staging plans are currently planned-only. `StagingPlanService` does not move, copy, delete, quarantine, or reject any files. It accepts `RoutingPlan` or `RoutingDecision` objects and returns `StagingItem` or `FluxResult` with `PlannedChange` entries, never `AppliedChange`.
+
+`StagingArea` values (`incoming`, `approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`) represent planned destinations, not executed actions. `delete_eligible` does not mean deletion has occurred; it means the item is eligible for future deletion pending explicit policy approval and apply-mode execution.
+
+`StagingActionType` values (`plan_only`, `move`, `copy`, `mark_delete_eligible`, `none`) are all treated as `plan_only` in this commit. No real move, copy, or delete operation is performed.
+
+Future real staging execution must require explicit `--apply` mode with safety checks. It must not touch a real music library, personal music folders, or download folders. All file operations must be confined to the Flux workspace root with path containment and symlink protection.
+
+`StagingPlan` is separate from `RoutingDecision`. `RoutingDecision` decides the conceptual destination; `StagingPlan` prepares the planned filesystem change. The two must remain separate: routing does not execute staging automatically, and staging does not alter routing or quality results.
+
+`StagingPolicy` controls staging behavior:
+- `allow_delete_eligible` (default false) — when false, `delete_eligible` outcomes are converted to `rejected` with a clear warning.
+- `allow_real_moves` (default false) — when false, no real move or copy operations are permitted.
+- `quarantine_heuristic_warnings` (default true) — when true, review outcomes stay in review; when false, they route to quarantine.
+
+Source and target relative paths are validated for safety: absolute paths and path traversal markers (`..`, `~`, `$`, `{`, `}`) are blocked. Real filesystem validation will come in a future executor layer.
+
+Automated staging tests must use fake routing data, temporary directories, or controlled fixtures only. They must not use real audio files, network access, file movement tools, or personal filesystem paths.
+
+Staging contracts must not expose:
+
+- Complete lyrics.
+- Raw audio fingerprints.
+- Raw provider payloads.
+- Secrets, tokens, or credentials.
+- Unnecessary personal absolute paths.
+
+`StagingPolicy` is versioned so MusicLab can calibrate staging thresholds before any real provider or file execution is active. The default policy declares `stage: post-download`, `status: contracts-only`, `allow_delete_eligible: false`, and `allow_real_moves: false`.
+
 ## Reports
 
 Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.

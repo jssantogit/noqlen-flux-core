@@ -136,6 +136,35 @@ Heuristic warnings must never cause `delete_eligible` outcome. Objective failure
 
 The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (planned decision). `CandidateScoringService` does not import `RoutingDecisionService`. `QualityService` does not execute `RoutingDecisionService` automatically. `RoutingDecisionService` consumes `QualityResult` but does not alter it.
 
+## Staging Plan Foundation
+
+Post-download staging plan is a separate core domain from routing decision. `RoutingDecision` decides the conceptual destination; `StagingPlan` prepares the planned filesystem change. A future executor will apply real changes only with explicit `--apply` mode and safety checks.
+
+Flux owns these staging models:
+
+- `StagingArea` — planned filesystem destination: `incoming`, `approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`.
+- `StagingActionType` — planned action type: `plan_only`, `move`, `copy`, `mark_delete_eligible`, `none`. All actions are planned-only at this stage; no real file movement, copy, or deletion occurs.
+- `StagingItem` — structured staging entry for a single item: item_id, routing_outcome, optional source_relative_path, target_area, optional target_relative_path, action_type, warnings, errors, and safe metadata.
+- `StagingPlan` — aggregate plan with plan_id, items, planned_changes, warnings, errors, and safe metadata.
+- `StagingPolicy` — versioned policy with name, version, description, `allow_delete_eligible` (default false), `allow_real_moves` (default false), `quarantine_heuristic_warnings` (default true), and safe metadata.
+
+`StagingPlanService` provides service-level staging evaluation and planning. It accepts `RoutingPlan` or `RoutingDecision` objects and returns `StagingItem` or `FluxResult` with `PlannedChange` objects. It does not access the network, move files, delete files, create files, copy files, or know about `slskd`.
+
+Staging plan logic:
+
+- `RoutingOutcome` approved → `StagingArea` approved, action `plan_only`.
+- `RoutingOutcome` quarantine → `StagingArea` quarantine, action `plan_only`.
+- `RoutingOutcome` rejected → `StagingArea` rejected, action `plan_only`.
+- `RoutingOutcome` delete_eligible → `StagingArea` delete_eligible only if policy allows; otherwise converts to rejected with a clear warning. Action is always `plan_only`.
+- `RoutingOutcome` review → `StagingArea` review by default, or quarantine if policy disables review. Action is always `plan_only`.
+- `RoutingOutcome` unknown → `StagingArea` unknown, action `none`, with warning.
+
+`delete_eligible` is not deletion. It means the item is eligible for future deletion pending explicit policy approval and apply-mode execution. No real delete, move, copy, or quarantine occurs in this commit.
+
+Source and target relative paths are validated for safety: absolute paths and path traversal markers are blocked. Real filesystem validation will come in a future executor layer.
+
+The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (planned decision) → staging (planned filesystem change). `RoutingDecisionService` does not execute `StagingPlanService` automatically. `StagingPlanService` consumes `RoutingPlan`/`RoutingDecision` but does not alter quality, scoring, or routing results.
+
 ## Quality Analysis And Routing (Future)
 
 Post-download quality analysis and routing will continue to evolve as separate layers from pre-download scoring:
@@ -144,9 +173,11 @@ Post-download quality analysis and routing will continue to evolve as separate l
 - `QualityFinding` — individual observations such as spectral cutoffs, codec artifacts, or declared-vs-actual mismatches.
 - `QualityGrade` — summary classification: `excellent` / `medium` / `bad`. This is NOT `CandidateRisk`.
 - `RoutingDecision` — a separate service layer that combines `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration to produce decisions: `approved` / `quarantine` / `rejected` / `delete_eligible`.
+- `StagingPlan` — a separate service layer that translates `RoutingDecision` outcomes into planned filesystem changes: target area, relative path, and planned action.
 - `calibration_profile` — MusicLab sessions that tune scoring weights, quality heuristics, and routing thresholds against controlled fixtures before any real provider or download behavior is active.
+- `StagingExecutor` — a future layer that applies real filesystem changes (move, copy, mark) only with explicit `--apply` mode and safety checks.
 
-Pre-download scoring (`CandidateScore`, `CandidateRisk`) must not grow into audio quality or routing decisions. The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (combined decision).
+Pre-download scoring (`CandidateScore`, `CandidateRisk`) must not grow into audio quality, routing, or staging decisions. The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (planned decision) → staging (planned filesystem change) → executor (real execution).
 
 ## Result Contracts
 
@@ -175,6 +206,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 `QualityService` owns post-download quality evaluation and summarization. It accepts structured fake data (item_id, optional relative_path, grade, findings, profile) and returns `FluxResult` with steps, warnings, errors, and logical quality artifacts. It does not download files, create files, access the network, read audio, use ffmpeg, perform transcode analysis, call providers, or know about `slskd`. It does not decide routing, quarantine, rejection, or deletion. Quality analysis is inherently contracts-only at this stage; real audio inspection will come in a separate future layer.
 
 `RoutingDecisionService` owns post-download routing decision planning. It accepts `QualityResult` objects and optional `RoutingPolicy`, returns `RoutingDecision` or `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, move files, delete files, call providers, or know about `slskd`. It does not execute real routing actions; all decisions are planned-only. Real execution will come in a separate future layer with explicit apply mode and safety checks.
+
+`StagingPlanService` owns post-download staging plan preparation. It accepts `RoutingPlan` or `RoutingDecision` objects and optional `StagingPolicy`, returns `StagingItem` or `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, move files, delete files, copy files, call providers, or know about `slskd`. It does not execute real staging actions; all changes are planned-only. Real execution will come in a separate future executor layer with explicit apply mode and safety checks.
 
 ## MusicLab
 
@@ -207,6 +240,8 @@ Transfer planning CLI commands are adapters over `TransferPlanningService`: `tra
 Quality CLI commands are adapters over `QualityService`: `quality fake excellent`, `quality fake medium`, `quality fake bad`, and `quality fake unknown` simulate post-download quality results with fake data, call `QualityService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement quality analysis logic, read audio files, or perform real inspection. All quality commands are contracts-only and have no `--apply` mode.
 
 Routing CLI commands are adapters over `RoutingDecisionService`: `routing fake excellent`, `routing fake medium`, `routing fake bad-objective`, `routing fake bad-heuristic`, and `routing fake unknown` simulate post-download routing decisions from fake quality results, call `RoutingDecisionService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement routing logic, move files, delete files, or perform real routing. All routing commands are planned-only and have no `--apply` mode.
+
+Staging CLI commands are adapters over `StagingPlanService`: `staging fake approved`, `staging fake quarantine`, `staging fake rejected`, `staging fake delete-eligible`, and `staging fake review` simulate post-download staging plans from fake routing decisions, call `StagingPlanService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement staging logic, move files, delete files, copy files, or perform real staging. All staging commands are planned-only and have no `--apply` mode.
 
 ## Future Controllers
 

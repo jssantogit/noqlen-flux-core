@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SearchService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SearchService, StagingPlanService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -185,6 +185,14 @@ def build_parser() -> argparse.ArgumentParser:
     routing_fake.add_argument("scenario", choices=["excellent", "medium", "bad-objective", "bad-heuristic", "unknown"], help="Routing scenario to simulate")
     routing_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
     routing_fake.set_defaults(func=run_routing_fake)
+
+    staging = subparsers.add_parser("staging", help="Plan staging operations (planned-only, no execution)")
+    staging_subparsers = staging.add_subparsers(dest="staging_command")
+
+    staging_fake = staging_subparsers.add_parser("fake", help="Plan staging for a fake routing outcome")
+    staging_fake.add_argument("outcome", choices=["approved", "quarantine", "rejected", "delete-eligible", "review"], help="Fake routing outcome to stage")
+    staging_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
+    staging_fake.set_defaults(func=run_staging_fake)
 
     return parser
 
@@ -496,6 +504,36 @@ def run_routing_fake(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_staging_fake(args: argparse.Namespace) -> int:
+    import uuid
+
+    from noqlen_flux.routing import RoutingActionType, RoutingDecision, RoutingOutcome, RoutingPlan
+
+    outcome_map = {
+        "approved": RoutingOutcome.APPROVED,
+        "quarantine": RoutingOutcome.QUARANTINE,
+        "rejected": RoutingOutcome.REJECTED,
+        "delete-eligible": RoutingOutcome.DELETE_ELIGIBLE,
+        "review": RoutingOutcome.REVIEW,
+    }
+    outcome = outcome_map[args.outcome]
+
+    decision = RoutingDecision(
+        item_id=args.item_id,
+        outcome=outcome,
+        action_type=RoutingActionType.PLAN_ONLY,
+    )
+
+    routing_plan = RoutingPlan(
+        plan_id=str(uuid.uuid4()),
+        decisions=[decision],
+    )
+
+    result = StagingPlanService().plan_staging(routing_plan)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _resolve_provider(kind: str):
     if kind == "fake":
         return FakeSearchProvider(
@@ -581,6 +619,25 @@ def _render_result(result: FluxResult) -> str:
     review_count = result.summary.get("review_count")
     if review_count is not None:
         lines.append(f"review: {review_count}")
+    if result.operation == "staging":
+        staging_item_count = result.summary.get("item_count")
+        if staging_item_count is not None:
+            lines.append(f"staging items: {staging_item_count}")
+        staging_approved = result.summary.get("approved_count")
+        if staging_approved is not None:
+            lines.append(f"staging approved: {staging_approved}")
+        staging_quarantine = result.summary.get("quarantine_count")
+        if staging_quarantine is not None:
+            lines.append(f"staging quarantine: {staging_quarantine}")
+        staging_rejected = result.summary.get("rejected_count")
+        if staging_rejected is not None:
+            lines.append(f"staging rejected: {staging_rejected}")
+        staging_delete = result.summary.get("delete_eligible_count")
+        if staging_delete is not None:
+            lines.append(f"staging delete-eligible: {staging_delete}")
+        staging_review = result.summary.get("review_count")
+        if staging_review is not None:
+            lines.append(f"staging review: {staging_review}")
     return "\n".join(lines)
 
 
