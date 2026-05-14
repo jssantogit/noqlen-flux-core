@@ -1,12 +1,16 @@
 import pytest
 
 from noqlen_flux.staging import (
+    DEFAULT_STAGING_EXECUTION_POLICY,
     DEFAULT_STAGING_POLICY,
     StagingActionType,
     StagingArea,
+    StagingExecutionPolicy,
+    StagingExecutionSummary,
     StagingItem,
     StagingPlan,
     StagingPolicy,
+    default_staging_execution_policy,
     default_staging_policy,
     validate_relative_path,
 )
@@ -226,3 +230,74 @@ def test_staging_item_blocks_traversal_in_target() -> None:
             target_area=StagingArea.APPROVED,
             target_relative_path="../../../tmp/evil",
         )
+
+
+def test_staging_execution_policy_defaults() -> None:
+    policy = StagingExecutionPolicy(
+        name="test_v1",
+        version="1",
+        description="Test policy",
+    )
+
+    assert policy.allow_copy is True
+    assert policy.allow_move is False
+    assert policy.allow_delete is False
+    assert policy.allow_overwrite is False
+    assert policy.create_workspace_dirs is True
+
+
+def test_staging_execution_policy_serializes_safely() -> None:
+    policy = StagingExecutionPolicy(
+        name="test_v1",
+        version="1",
+        description="Test with secret",
+        metadata={"secret": "hidden"},
+    )
+
+    payload = policy.to_dict()
+
+    assert payload["name"] == "test_v1"
+    assert payload["metadata"]["secret"] == "[redacted]"
+
+
+def test_staging_execution_summary_defaults() -> None:
+    summary = StagingExecutionSummary()
+
+    assert summary.total_items == 0
+    assert summary.planned_count == 0
+    assert summary.applied_count == 0
+    assert summary.blocked_count == 0
+    assert summary.skipped_count == 0
+    assert summary.warnings == []
+    assert summary.errors == []
+
+
+def test_staging_execution_summary_serializes_safely() -> None:
+    summary = StagingExecutionSummary(
+        total_items=5,
+        applied_count=3,
+        blocked_count=1,
+        skipped_count=1,
+        warnings=["test warning"],
+        metadata={"secret": "hidden"},
+    )
+
+    payload = summary.to_dict()
+
+    assert payload["total_items"] == 5
+    assert payload["applied_count"] == 3
+    assert payload["blocked_count"] == 1
+    assert payload["skipped_count"] == 1
+    assert payload["metadata"]["secret"] == "[redacted]"
+
+
+def test_default_staging_execution_policy_exists() -> None:
+    policy = default_staging_execution_policy()
+
+    assert policy.name == "default_v1"
+    assert policy.version == "1"
+    assert policy.allow_copy is True
+    assert policy.allow_move is False
+    assert policy.allow_delete is False
+    assert policy.allow_overwrite is False
+    assert policy.create_workspace_dirs is True

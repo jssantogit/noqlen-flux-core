@@ -109,6 +109,54 @@ class StagingPolicy:
         return _clean(asdict(self))
 
 
+@dataclass(slots=True, frozen=True)
+class StagingExecutionPolicy:
+    name: str
+    version: str
+    description: str
+    allow_copy: bool = True
+    allow_move: bool = False
+    allow_delete: bool = False
+    allow_overwrite: bool = False
+    create_workspace_dirs: bool = True
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+@dataclass(slots=True, frozen=True)
+class StagingExecutionSummary:
+    total_items: int = 0
+    planned_count: int = 0
+    applied_count: int = 0
+    blocked_count: int = 0
+    skipped_count: int = 0
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+DEFAULT_STAGING_EXECUTION_POLICY = StagingExecutionPolicy(
+    name="default_v1",
+    version="1",
+    description="Initial staging execution policy. Copy allowed within workspace. Move, delete, and overwrite are blocked by default.",
+    allow_copy=True,
+    allow_move=False,
+    allow_delete=False,
+    allow_overwrite=False,
+    create_workspace_dirs=True,
+    metadata={"stage": "post-download", "status": "execution-foundation"},
+)
+
+
+def default_staging_execution_policy() -> StagingExecutionPolicy:
+    return DEFAULT_STAGING_EXECUTION_POLICY
+
+
 DEFAULT_STAGING_POLICY = StagingPolicy(
     name="default_v1",
     version="1",

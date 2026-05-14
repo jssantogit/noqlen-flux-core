@@ -362,3 +362,59 @@ def test_fileops_demo_apply_works(tmp_path, capsys) -> None:
     assert "mode: apply" in output
     assert (workspace / "incoming").is_dir()
     assert (workspace / "approved").is_dir()
+
+
+def test_staging_execute_fake_approved_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["staging", "execute", "fake-approved", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging-execution: success" in output
+    assert "mode: dry-run" in output
+    assert not workspace.exists()
+
+
+def test_staging_execute_fake_approved_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["staging", "execute", "fake-approved", "--workspace", str(workspace), "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging-execution:" in output
+    assert "mode: apply" in output
+    assert (workspace / "incoming").is_dir()
+    assert (workspace / "approved").is_dir()
+
+
+def test_staging_execute_fake_quarantine_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["staging", "execute", "fake-quarantine", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging-execution:" in output
+    assert "mode: dry-run" in output
+    assert not workspace.exists()
+
+
+def test_staging_execute_fake_rejected_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["staging", "execute", "fake-rejected", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging-execution:" in output
+    assert "mode: dry-run" in output
+    assert not workspace.exists()
+
+
+def test_staging_execute_fake_delete_eligible_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["staging", "execute", "fake-delete-eligible", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "staging-execution:" in output
+    assert "mode: dry-run" in output
+    assert not workspace.exists()

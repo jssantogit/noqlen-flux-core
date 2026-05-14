@@ -12,6 +12,7 @@ from .routing import RoutingDecisionService
 from .scoring import CandidateScoringService
 from .search import SearchService
 from .staging import StagingPlanService
+from .staging_execution import StagingExecutionService
 from .transfers import TransferPlanningService
 from .workspace import WorkspaceService
 
@@ -27,6 +28,7 @@ __all__ = [
     "RoutingDecisionService",
     "SafeFileOperationService",
     "SearchService",
+    "StagingExecutionService",
     "StagingPlanService",
     "TransferPlanningService",
     "WorkspaceService",

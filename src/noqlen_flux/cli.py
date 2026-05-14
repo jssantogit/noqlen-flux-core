@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingPlanService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -186,13 +186,21 @@ def build_parser() -> argparse.ArgumentParser:
     routing_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
     routing_fake.set_defaults(func=run_routing_fake)
 
-    staging = subparsers.add_parser("staging", help="Plan staging operations (planned-only, no execution)")
+    staging = subparsers.add_parser("staging", help="Plan or execute safe staging operations")
     staging_subparsers = staging.add_subparsers(dest="staging_command")
 
     staging_fake = staging_subparsers.add_parser("fake", help="Plan staging for a fake routing outcome")
     staging_fake.add_argument("outcome", choices=["approved", "quarantine", "rejected", "delete-eligible", "review"], help="Fake routing outcome to stage")
     staging_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
     staging_fake.set_defaults(func=run_staging_fake)
+
+    staging_execute = staging_subparsers.add_parser("execute", help="Execute a staging plan within workspace boundary")
+    staging_execute.add_argument("scenario", choices=["fake-approved", "fake-quarantine", "fake-rejected", "fake-delete-eligible", "fake-review"], help="Fake staging scenario to execute")
+    staging_execute.add_argument("--workspace", required=True, help="Workspace root path")
+    staging_execute_mode = staging_execute.add_mutually_exclusive_group()
+    staging_execute_mode.add_argument("--dry-run", action="store_true", help="Plan staging execution without altering filesystem")
+    staging_execute_mode.add_argument("--apply", action="store_true", help="Execute staging operations within workspace")
+    staging_execute.set_defaults(func=run_staging_execute)
 
     fileops = subparsers.add_parser("fileops", help="Plan or execute safe filesystem operations")
     fileops_subparsers = fileops.add_subparsers(dest="fileops_command")
@@ -544,6 +552,72 @@ def run_staging_fake(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_staging_execute(args: argparse.Namespace) -> int:
+    import uuid
+
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.routing import RoutingActionType, RoutingDecision, RoutingOutcome, RoutingPlan
+    from noqlen_flux.services.staging import StagingPlanService
+    from noqlen_flux.staging import (
+        DEFAULT_STAGING_EXECUTION_POLICY,
+        StagingActionType,
+        StagingArea,
+        StagingItem,
+        StagingPlan,
+    )
+
+    dry_run = not args.apply
+    config = config_from_env(args.workspace, dry_run=dry_run)
+
+    scenario_area_map = {
+        "fake-approved": StagingArea.APPROVED,
+        "fake-quarantine": StagingArea.QUARANTINE,
+        "fake-rejected": StagingArea.REJECTED,
+        "fake-delete-eligible": StagingArea.DELETE_ELIGIBLE,
+        "fake-review": StagingArea.REVIEW,
+    }
+    area = scenario_area_map[args.scenario]
+
+    item_id = f"demo-{area.value}-item"
+    source_relative = f"incoming/{item_id}.txt"
+    target_relative = f"{area.value}/{item_id}.txt"
+
+    if area == StagingArea.DELETE_ELIGIBLE:
+        action_type = StagingActionType.MARK_DELETE_ELIGIBLE
+    else:
+        action_type = StagingActionType.COPY
+
+    staging_item = StagingItem(
+        item_id=item_id,
+        routing_outcome=area.value,
+        source_relative_path=source_relative,
+        target_area=area,
+        target_relative_path=target_relative,
+        action_type=action_type,
+        metadata={"scenario": args.scenario, "mode": "dry-run" if dry_run else "apply"},
+    )
+
+    staging_plan = StagingPlan(
+        plan_id=str(uuid.uuid4()),
+        items=[staging_item],
+        metadata={"scenario": args.scenario},
+    )
+
+    if dry_run:
+        result = StagingExecutionService().execute_staging_plan(staging_plan, config, dry_run=True)
+    else:
+        incoming_dir = config.workspace_root / "incoming"
+        incoming_dir.mkdir(parents=True, exist_ok=True)
+        demo_file = incoming_dir / f"{item_id}.txt"
+        if not demo_file.exists():
+            demo_file.write_text(f"Fake demo content for {item_id}\n")
+
+        result = StagingExecutionService().execute_staging_plan(staging_plan, config, dry_run=False)
+
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def run_fileops_demo(args: argparse.Namespace) -> int:
     import uuid
 
@@ -687,6 +761,28 @@ def _render_result(result: FluxResult) -> str:
         op_count = result.summary.get("operation_count")
         if op_count is not None:
             lines.append(f"operations: {op_count}")
+        mode = result.summary.get("mode")
+        if mode is not None:
+            lines.append(f"mode: {mode}")
+        applied_count = result.summary.get("applied_count")
+        if applied_count is not None:
+            lines.append(f"applied: {applied_count}")
+        planned_count = result.summary.get("planned_count")
+        if planned_count is not None:
+            lines.append(f"planned: {planned_count}")
+        skipped_count = result.summary.get("skipped_count")
+        if skipped_count is not None:
+            lines.append(f"skipped: {skipped_count}")
+        blocked_count = result.summary.get("blocked_count")
+        if blocked_count is not None:
+            lines.append(f"blocked: {blocked_count}")
+        failed_count = result.summary.get("failed_count")
+        if failed_count is not None:
+            lines.append(f"failed: {failed_count}")
+    if result.operation == "staging-execution":
+        total_items = result.summary.get("total_items")
+        if total_items is not None:
+            lines.append(f"items: {total_items}")
         mode = result.summary.get("mode")
         if mode is not None:
             lines.append(f"mode: {mode}")

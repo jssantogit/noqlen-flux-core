@@ -29,6 +29,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Post-download routing decision contracts and fake planning service (`RoutingOutcome`, `RoutingDecision`, `RoutingPolicy`, `RoutingPlan`).
 - Post-download staging plan contracts and fake planning service (`StagingArea`, `StagingItem`, `StagingPlan`, `StagingPolicy`, `StagingPlanService`).
 - Safe filesystem operation executor with dry-run/apply safety (`FileOperationType`, `FileOperationState`, `FileOperation`, `FileOperationPlan`, `FileOperationResult`, `FileExecutionPolicy`, `SafeFileOperationService`).
+- Safe staging execution workflow connecting `StagingPlan` with `SafeFileOperationService` (`StagingExecutionPolicy`, `StagingExecutionSummary`, `StagingExecutionService`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -255,6 +256,26 @@ noqlen-flux staging fake rejected
 ```
 
 This is not real file staging. Flux still has no file movement, deletion, copy, quarantine execution, or cleanup behavior. All staging plans are planned-only and use `PlannedChange` objects, never `AppliedChange`. `delete_eligible` does not mean deletion has occurred. Real execution will come in a separate future commit with explicit apply mode and safety checks.
+
+## Staging Execution Foundation
+
+Staging execution connects `StagingPlan` with `SafeFileOperationService` to allow controlled execution of staging plans within the workspace. Dry-run is the default; apply requires an explicit `--apply` flag.
+
+Plan staging execution without altering the filesystem:
+
+```bash
+noqlen-flux staging execute fake-approved --workspace ./flux-workspace --dry-run
+```
+
+Apply mode must be explicit before any filesystem changes occur:
+
+```bash
+noqlen-flux staging execute fake-approved --workspace ./flux-workspace --apply
+```
+
+Copy is allowed by default within the workspace. Move is blocked by default. Overwrite is blocked by default. Delete does not exist. `mark_delete_eligible` generates mark operations only, never delete. All operations are confined to the workspace root with path containment, symlink protection, and protected-root checks.
+
+This is not real cleanup, auto-delete, or music library management. Flux still has no real download, no `slskd`, no ffmpeg, no quality analysis, and no handoff.
 
 ## Filesystem Operation Safety Foundation
 

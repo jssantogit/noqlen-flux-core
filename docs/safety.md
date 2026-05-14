@@ -171,30 +171,28 @@ Staging plans are currently planned-only. `StagingPlanService` does not move, co
 
 `StagingArea` values (`incoming`, `approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`) represent planned destinations, not executed actions. `delete_eligible` does not mean deletion has occurred; it means the item is eligible for future deletion pending explicit policy approval and apply-mode execution.
 
-`StagingActionType` values (`plan_only`, `move`, `copy`, `mark_delete_eligible`, `none`) are all treated as `plan_only` in this commit. No real move, copy, or delete operation is performed.
+`StagingActionType` values (`plan_only`, `move`, `copy`, `mark_delete_eligible`, `none`) are all treated as `plan_only` in `StagingPlanService`. No real move, copy, or delete operation is performed by the planning service.
 
-Future real staging execution must require explicit `--apply` mode with safety checks. It must not touch a real music library, personal music folders, or download folders. All file operations must be confined to the Flux workspace root with path containment and symlink protection.
+## Staging Execution
 
-`StagingPlan` is separate from `RoutingDecision`. `RoutingDecision` decides the conceptual destination; `StagingPlan` prepares the planned filesystem change. The two must remain separate: routing does not execute staging automatically, and staging does not alter routing or quality results.
+Staging execution connects `StagingPlan` with `SafeFileOperationService` to allow controlled execution of staging plans within the workspace. Dry-run is the default: no directories are created, no files are created, copied, moved, or deleted. Apply mode requires an explicit `--apply` flag.
 
-`StagingPolicy` controls staging behavior:
-- `allow_delete_eligible` (default false) — when false, `delete_eligible` outcomes are converted to `rejected` with a clear warning.
-- `allow_real_moves` (default false) — when false, no real move or copy operations are permitted.
-- `quarantine_heuristic_warnings` (default true) — when true, review outcomes stay in review; when false, they route to quarantine.
+Delete does not exist in this commit. `StagingExecutionPolicy.allow_delete` is always false and has no effect. `mark_delete_eligible` generates mark operations only, never delete.
 
-Source and target relative paths are validated for safety: absolute paths and path traversal markers (`..`, `~`, `$`, `{`, `}`) are blocked. Real filesystem validation will come in a future executor layer.
+Overwrite is blocked by default. When `allow_overwrite=false` (the default), any operation targeting an existing path is blocked with a warning. Move is blocked by default unless `allow_move=true` is set in an explicit policy. Copy is allowed by default but still subject to workspace boundary and path safety checks.
 
-Automated staging tests must use fake routing data, temporary directories, or controlled fixtures only. They must not use real audio files, network access, file movement tools, or personal filesystem paths.
+All operations must stay within the workspace root. Path traversal (`..`), absolute paths, symlink escape, and protected roots are blocked before any operation is planned or applied. Source paths that are symlinks resolving outside the workspace are rejected. Target paths that would escape the workspace via symlink are rejected.
 
-Staging contracts must not expose:
+`StagingExecutionService` returns `PlannedChange` objects in dry-run mode, never `AppliedChange`. Apply mode returns `AppliedChange` only for operations that were actually executed.
 
-- Complete lyrics.
-- Raw audio fingerprints.
-- Raw provider payloads.
-- Secrets, tokens, or credentials.
-- Unnecessary personal absolute paths.
+`StagingExecutionPolicy` controls staging execution behavior:
+- `allow_copy` (default true) — copy operations are allowed within the workspace.
+- `allow_move` (default false) — move operations are blocked unless explicitly allowed.
+- `allow_delete` (default false) — delete does not exist; this flag has no effect.
+- `allow_overwrite` (default false) — overwrite is blocked by default.
+- `create_workspace_dirs` (default true) — staging directories are created automatically if needed.
 
-`StagingPolicy` is versioned so MusicLab can calibrate staging thresholds before any real provider or file execution is active. The default policy declares `stage: post-download`, `status: contracts-only`, `allow_delete_eligible: false`, and `allow_real_moves: false`.
+Automated staging execution tests must use temporary directories, fake fixtures, or controlled workspace layouts only. They must not use real music files, network access, or personal filesystem paths.
 
 ## File Operations
 

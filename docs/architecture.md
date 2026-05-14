@@ -165,6 +165,43 @@ Source and target relative paths are validated for safety: absolute paths and pa
 
 The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (planned decision) → staging (planned filesystem change). `RoutingDecisionService` does not execute `StagingPlanService` automatically. `StagingPlanService` consumes `RoutingPlan`/`RoutingDecision` but does not alter quality, scoring, or routing results.
 
+## Staging Execution Foundation
+
+Staging execution is the layer that connects `StagingPlan` with `SafeFileOperationService` to allow controlled execution of staging plans within the workspace. `RoutingDecision` decides the conceptual destination; `StagingPlan` prepares the planned filesystem change; `FileOperationPlan` translates to concrete operations; `SafeFileOperationService` applies them with safety checks.
+
+Flux owns these staging execution models:
+
+- `StagingExecutionPolicy` — versioned policy with name, version, description, `allow_copy` (default true), `allow_move` (default false), `allow_delete` (default false), `allow_overwrite` (default false), `create_workspace_dirs` (default true), and safe metadata.
+- `StagingExecutionSummary` — execution summary with total_items, planned_count, applied_count, blocked_count, skipped_count, warnings, errors, and safe metadata.
+
+`StagingExecutionService` provides service-level staging plan execution. It accepts `StagingPlan` objects and returns `FluxResult` with `PlannedChange` and `AppliedChange` objects. It does not access the network, download files, or know about `slskd`.
+
+Staging execution logic:
+
+- Dry-run (default): no directories are created, no files are created, copied, moved, or deleted. Returns `PlannedChange` with state `planned`, `skipped`, or `blocked`.
+- Apply mode (explicit `--apply`): operations are executed within the workspace boundary only. Copy is allowed by default. Move is blocked by default unless `policy.allow_move=true`. Overwrite is blocked by default. Delete does not exist. `mark_delete_eligible` generates mark operations only, never delete. Workspace staging directories are created automatically if `policy.create_workspace_dirs=true`. Returns `AppliedChange` for successfully applied operations.
+- `StagingArea` approved → target in `approved/`.
+- `StagingArea` quarantine → target in `quarantine/`.
+- `StagingArea` rejected → target in `rejected/`.
+- `StagingArea` review → target in `review/` or `quarantine/` per policy.
+- `StagingArea` delete_eligible → mark only, never delete.
+- `StagingActionType` move → `FileOperationType` move only if `policy.allow_move=true`.
+- `StagingActionType` copy → `FileOperationType` copy if `policy.allow_copy=true`.
+- `StagingActionType` mark_delete_eligible → `FileOperationType` mark.
+- `StagingActionType` plan_only/none → skipped/none.
+
+Safety constraints:
+
+- `source_relative_path` is required for copy/move; insecure source blocks the operation.
+- `target_relative_path` must be safe; insecure target blocks the operation.
+- Absolute paths are blocked.
+- Path traversal is blocked.
+- Symlink escape is blocked via fileops.
+- Protected roots are blocked.
+- No operation exits the workspace.
+
+The separation must remain: staging (planned intention) → staging execution (orchestrated workflow) → fileops (concrete operations) → safe executor (real execution). `StagingPlanService` does not execute `StagingExecutionService` automatically. `StagingExecutionService` consumes `StagingPlan` but does not alter staging or routing results.
+
 ## Quality Analysis And Routing (Future)
 
 Post-download quality analysis and routing will continue to evolve as separate layers from pre-download scoring:
@@ -271,7 +308,7 @@ Quality CLI commands are adapters over `QualityService`: `quality fake excellent
 
 Routing CLI commands are adapters over `RoutingDecisionService`: `routing fake excellent`, `routing fake medium`, `routing fake bad-objective`, `routing fake bad-heuristic`, and `routing fake unknown` simulate post-download routing decisions from fake quality results, call `RoutingDecisionService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement routing logic, move files, delete files, or perform real routing. All routing commands are planned-only and have no `--apply` mode.
 
-Staging CLI commands are adapters over `StagingPlanService`: `staging fake approved`, `staging fake quarantine`, `staging fake rejected`, `staging fake delete-eligible`, and `staging fake review` simulate post-download staging plans from fake routing decisions, call `StagingPlanService`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement staging logic, move files, delete files, copy files, or perform real staging. All staging commands are planned-only and have no `--apply` mode.
+Staging CLI commands are adapters over `StagingPlanService` and `StagingExecutionService`: `staging fake approved`, `staging fake quarantine`, `staging fake rejected`, `staging fake delete-eligible`, and `staging fake review` simulate post-download staging plans from fake routing decisions, call `StagingPlanService`, render the returned `FluxResult`, and choose the process exit code. `staging execute fake-approved --workspace PATH --dry-run` plans staging execution without altering the filesystem, while `staging execute fake-approved --workspace PATH --apply` executes copy operations within the workspace boundary using a small fake demo file. The CLI does not implement staging logic, move files, delete files, copy real music files, or perform real staging outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
 
 Fileops CLI commands are adapters over `SafeFileOperationService`: `fileops demo --workspace PATH --dry-run` plans safe filesystem operations without executing them, while `fileops demo --workspace PATH --apply` executes mkdir/copy/move operations within the workspace boundary per policy. The CLI does not implement file operation logic, delete files, or perform operations outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
 
