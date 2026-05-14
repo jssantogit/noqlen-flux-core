@@ -9,7 +9,8 @@ from .providers.fake import FakeSearchProvider
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ReportService, SearchService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ReportService, SearchService, TransferPlanningService, WorkspaceService
+from .transfers import TransferPriority
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +133,29 @@ def build_parser() -> argparse.ArgumentParser:
     download_plan_fake_album.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
     download_plan_fake_album.add_argument("--allow-locked", action="store_true", help="Allow locked files")
     download_plan_fake_album.set_defaults(func=run_download_plan_fake_album)
+
+    transfer = subparsers.add_parser("transfer", help="Plan safe transfer/queue operations")
+    transfer_subparsers = transfer.add_subparsers(dest="transfer_command")
+
+    transfer_plan = transfer_subparsers.add_parser("plan", help="Plan a transfer queue without executing it")
+    transfer_plan_subparsers = transfer_plan.add_subparsers(dest="transfer_plan_provider")
+
+    transfer_plan_fake = transfer_plan_subparsers.add_parser("fake", help="Plan a transfer from a fake provider")
+    transfer_plan_fake_subparsers = transfer_plan_fake.add_subparsers(dest="transfer_plan_kind")
+
+    transfer_plan_fake_track = transfer_plan_fake_subparsers.add_parser("track", help="Plan a fake track transfer")
+    transfer_plan_fake_track.add_argument("--artist", required=True, help="Artist name")
+    transfer_plan_fake_track.add_argument("--title", required=True, help="Track title")
+    transfer_plan_fake_track.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    transfer_plan_fake_track.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
+    transfer_plan_fake_track.set_defaults(func=run_transfer_plan_fake_track)
+
+    transfer_plan_fake_album = transfer_plan_fake_subparsers.add_parser("album", help="Plan a fake album transfer")
+    transfer_plan_fake_album.add_argument("--artist", required=True, help="Artist name")
+    transfer_plan_fake_album.add_argument("--album", required=True, help="Album title")
+    transfer_plan_fake_album.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    transfer_plan_fake_album.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
+    transfer_plan_fake_album.set_defaults(func=run_transfer_plan_fake_album)
 
     return parser
 
@@ -286,6 +310,98 @@ def run_download_plan_fake_album(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_transfer_plan_fake_track(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+    provider = _demo_fake_provider()
+    provider_result = provider.search(query)
+    if not provider_result.candidates:
+        result = TransferPlanningService().result(
+            status=Status.FAILED,
+            error="no candidates found",
+        )
+        print(_render_result(result))
+        return 1
+    candidate = provider_result.candidates[0]
+    score = None
+    if args.score:
+        score = CandidateScoringService().score_candidate(query, candidate)
+    download_request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{args.artist} - {args.title}",
+        score=score,
+    )
+    download_plan_result = DownloadPlanningService().plan_download(download_request)
+    if download_plan_result.status == Status.FAILED:
+        print(_render_result(download_plan_result))
+        return 1
+    download_plan = _extract_download_plan(download_plan_result)
+    priority = TransferPriority(args.priority)
+    result = TransferPlanningService().plan_queue(download_plan, priority=priority)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_transfer_plan_fake_album(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album)
+    provider = _demo_fake_provider()
+    provider_result = provider.search(query)
+    if not provider_result.candidates:
+        result = TransferPlanningService().result(
+            status=Status.FAILED,
+            error="no candidates found",
+        )
+        print(_render_result(result))
+        return 1
+    candidate = provider_result.candidates[0]
+    score = None
+    if args.score:
+        score = CandidateScoringService().score_candidate(query, candidate)
+    download_request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.ALBUM,
+        query=f"{args.artist} - {args.album}",
+        score=score,
+    )
+    download_plan_result = DownloadPlanningService().plan_download(download_request)
+    if download_plan_result.status == Status.FAILED:
+        print(_render_result(download_plan_result))
+        return 1
+    download_plan = _extract_download_plan(download_plan_result)
+    priority = TransferPriority(args.priority)
+    result = TransferPlanningService().plan_queue(download_plan, priority=priority)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def _extract_download_plan(result: FluxResult):
+    from noqlen_flux.downloads import DownloadItem, DownloadPlan
+
+    summary = result.summary
+    items = []
+    for change in result.planned_changes:
+        items.append(
+            DownloadItem(
+                item_id=change.metadata.get("item_id", ""),
+                candidate_id=summary.get("candidate_id", ""),
+                filename=change.metadata.get("filename", ""),
+                target_relative_path=change.target,
+            )
+        )
+    return DownloadPlan(
+        plan_id=summary.get("plan_id", ""),
+        request_id=summary.get("request_id", ""),
+        candidate_id=summary.get("candidate_id", ""),
+        intent=DownloadIntent(summary.get("intent", "track")),
+        items=items,
+        target_relative_root=summary.get("target_relative_root"),
+        total_size_bytes=summary.get("total_size_bytes"),
+        warnings=summary.get("warnings", []),
+        blocked=summary.get("blocked", False),
+        block_reasons=summary.get("block_reasons", []),
+    )
+
+
 def _render_result(result: FluxResult) -> str:
     lines = [f"Noqlen Flux Core {result.operation}: {result.status.value}"]
     lines.extend(step.message for step in result.steps if step.message)
@@ -299,6 +415,12 @@ def _render_result(result: FluxResult) -> str:
     item_count = result.summary.get("item_count")
     if item_count is not None:
         lines.append(f"items: {item_count}")
+    queue_id = result.summary.get("queue_id")
+    if queue_id is not None:
+        lines.append(f"queue: {queue_id}")
+    state = result.summary.get("state")
+    if state is not None:
+        lines.append(f"state: {state}")
     return "\n".join(lines)
 
 

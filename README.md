@@ -21,6 +21,8 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Generic search domain models, provider contracts, and an in-memory fake provider for offline search-flow tests.
 - Explainable pre-download candidate scoring models and services using Flux-owned search candidates.
 - Download planning models and services that transform candidates into structured plans without executing transfers.
+- Transfer and queue planning models and services that transform download plans into structured queue plans without executing transfers.
+- Generic `TransferProvider` contract for future provider adapters (slskd, NativeSoulseekProvider).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -137,3 +139,23 @@ noqlen-flux download plan fake album --artist "Example Artist" --album "Example 
 Planning supports constraints such as `--score-min`, `--max-files`, `--max-total-bytes`, and `--allow-locked`. These affect only the plan, never execution.
 
 There is no real download, no queue, no transfer, no `slskd`, and no filesystem write beyond the workspace safety boundary. Real execution will come in a separate future commit.
+
+## Transfer And Queue Planning Foundation
+
+Transfer and queue planning transforms download plans into structured queue plans without executing any transfer. Queue plans are inherently dry-run and use `PlannedChange` objects, not `AppliedChange`.
+
+Plan a fake track transfer:
+
+```bash
+noqlen-flux transfer plan fake track --artist "Example Artist" --title "Example Track"
+```
+
+Plan a fake album transfer:
+
+```bash
+noqlen-flux transfer plan fake album --artist "Example Artist" --album "Example Album"
+```
+
+Planning supports priority selection via `--priority` (low, normal, high) and optional pre-download scoring via `--score`. These affect only the plan, never execution.
+
+There is no real transfer, no network access, no `slskd`, no filesystem write, and no music library interaction. Real execution will come in a separate future commit with an isolated `TransferProvider` adapter.

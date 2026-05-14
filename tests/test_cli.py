@@ -170,3 +170,51 @@ def test_musiclab_fixture_create_apply_works(tmp_path, capsys) -> None:
     assert "musiclab: success" in output
     assert "Wrote fake fixture: good-candidate" in output
     assert (workspace / "musiclab" / "sessions" / "session-a" / "fixtures" / "good-candidate.json").is_file()
+
+
+def test_download_plan_fake_track_works(capsys) -> None:
+    assert main(["download", "plan", "fake", "track", "--artist", "Example Artist", "--title", "Example Track"]) == 0
+
+    output = capsys.readouterr().out
+    assert "download-planning: success" in output
+    assert "items: 1" in output
+
+
+def test_download_plan_fake_album_works(capsys) -> None:
+    assert main(["download", "plan", "fake", "album", "--artist", "Example Artist", "--album", "Example Album"]) == 0
+
+    output = capsys.readouterr().out
+    assert "download-planning: success" in output
+    assert "items: 2" in output
+
+
+def test_transfer_plan_fake_track_works(capsys) -> None:
+    assert main(["transfer", "plan", "fake", "track", "--artist", "Example Artist", "--title", "Example Track"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-planning: success" in output
+    assert "items: 1" in output
+    assert "state: ready" in output
+
+
+def test_transfer_plan_fake_album_works(capsys) -> None:
+    assert main(["transfer", "plan", "fake", "album", "--artist", "Example Artist", "--album", "Example Album"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-planning: success" in output
+    assert "items: 2" in output
+    assert "state: ready" in output
+
+
+def test_transfer_plan_fake_track_with_score_works(capsys) -> None:
+    assert main(["transfer", "plan", "fake", "track", "--artist", "Example Artist", "--title", "Example Track", "--score"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-planning: success" in output
+
+
+def test_transfer_plan_fake_album_with_score_works(capsys) -> None:
+    assert main(["transfer", "plan", "fake", "album", "--artist", "Example Artist", "--album", "Example Album", "--score"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-planning: success" in output

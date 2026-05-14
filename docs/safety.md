@@ -91,6 +91,22 @@ Planning is not routing. `DownloadPlanningService` does not decide approval, rej
 
 No test uses real network access or a real music library. All tests use fake providers, fake candidates, temporary directories, or controlled fixtures.
 
+## Transfer And Queue Planning
+
+Transfer planning is inherently a dry-run operation. It does not download files, create files, access the network, call providers, or interact with any real provider including `slskd`.
+
+Queue plans are expressed as `QueuePlan` objects with `PlannedChange` entries, not `AppliedChange`. No file system mutation occurs during planning. Real execution will come in a separate future layer with an isolated `TransferProvider` adapter.
+
+`TransferPlanningService` does not decide approval, rejection, quarantine, or deletion. It only determines whether a transfer can be planned given the download plan data and item states.
+
+Locked items generate visible warnings in the queue plan. The service respects locked file information from the download plan without making quality or routing decisions.
+
+`TransferStatus` objects must not contain secrets, credentials, or personal absolute paths. Provider-specific payloads must not leak into the core transfer domain.
+
+The `TransferProvider` contract is generic and provider-neutral. A future `SlskdProvider` or `NativeSoulseekProvider` must implement the same contract without requiring core changes. Provider-specific payloads must be translated into Flux-owned models before they reach services.
+
+No test uses real network access or a real music library. All tests use fake providers, fake candidates, temporary directories, or controlled fixtures.
+
 ## Reports
 
 Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.

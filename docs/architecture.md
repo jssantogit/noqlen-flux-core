@@ -26,6 +26,8 @@ The in-memory fake provider is the first adapter. It exists to test search flow 
 
 A future `slskd` adapter should live under `providers/slskd` or an equivalent isolated module and translate external data into Flux-owned models. A future `NativeSoulseekProvider` should be able to implement the same contract and replace `slskd` without deep core changes.
 
+Transfer providers implement the generic `TransferProvider` contract: `name`, `health()`, `plan_queue(request)`, and `get_status(queue_item_id)`. The `FakeTransferProvider` is the first implementation for offline tests and demonstrations. A future `SlskdProvider` or `NativeSoulseekProvider` must implement this same contract without requiring core changes.
+
 ## Candidate Scoring
 
 Candidate scoring is a separate core domain from providers. Providers return `SearchCandidate` objects; `CandidateScoringService` scores those candidates with Flux-owned models such as `CandidateScore`, `ScoreComponent`, `ScoreReason`, `ScorePenalty`, `ScoringProfile`, and `ScoringResult`.
@@ -49,6 +51,22 @@ Download planning owns these models: `DownloadIntent`, `DownloadItem`, `Download
 Plans use `PlannedChange` objects, not `AppliedChange`. Download planning is inherently a dry-run operation. Real execution will come in a separate future layer.
 
 A future `slskd` adapter and a future `NativeSoulseekProvider` must both be compatible with this planning layer. The service accepts `SearchCandidate` and `CandidateScore` from the Flux domain and returns `DownloadPlan` without knowing which provider produced the candidate.
+
+## Transfer And Queue Planning
+
+Transfer and queue planning is a separate core domain that transforms `DownloadPlan` objects into structured `QueuePlan` objects with `TransferItem`, `QueueItem`, and `TransferStatus` contracts. It does not execute transfers, create files, access the network, or interact with any real provider.
+
+The flow is: `SearchProvider` → `SearchCandidate` → `CandidateScoringService` → `CandidateScore` → `DownloadPlanningService` → `DownloadPlan` → `TransferPlanningService` → `QueuePlan`.
+
+Transfer/queue planning owns these models: `TransferState`, `QueueState`, `TransferPriority`, `TransferItem`, `TransferRequest`, `QueueItem`, `QueuePlan`, `TransferStatus`, and `TransferArtifact`. All models are Flux-owned and do not depend on any provider-specific names or internals.
+
+`TransferPlanningService` converts `DownloadItem` objects into `TransferItem` and `QueueItem` objects, respects locked file information from the download plan, and generates warnings for locked items. It blocks queue plans when the download plan is blocked or has no items.
+
+Queue plans use `PlannedChange` objects, not `AppliedChange`. Transfer planning is inherently a dry-run operation. Real execution will come in a separate future layer with an isolated transfer provider.
+
+A future `slskd` adapter and a future `NativeSoulseekProvider` must both implement the `TransferProvider` contract (`name`, `health()`, `plan_queue()`, `get_status()`) without requiring core changes. The `TransferProvider` contract is generic and provider-neutral.
+
+`TransferPlanningService` does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer with a provider adapter.
 
 ## Quality Analysis And Routing (Future)
 
@@ -82,6 +100,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `DownloadPlanningService` owns download planning. It accepts `DownloadRequest` built from `SearchCandidate` and optional `CandidateScore`, applies `DownloadConstraint` rules, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer.
 
+`TransferPlanningService` owns transfer/queue planning. It accepts `DownloadPlan` from the download planning domain, converts `DownloadItem` objects into `TransferItem` and `QueueItem` objects, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Queue plans are inherently dry-run; real execution will come in a separate future layer with an isolated `TransferProvider` adapter.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
@@ -107,6 +127,8 @@ MusicLab CLI commands are adapters over `MusicLabService`: `musiclab inspect`, `
 Search CLI commands are adapters over `SearchService`: `search fake track` and `search fake album` build `SearchQuery` objects, instantiate only the safe in-memory fake provider, optionally attach `CandidateScoringService` for `--score`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement provider logic, scoring logic, or download behavior.
 
 Download planning CLI commands are adapters over `DownloadPlanningService`: `download plan fake track` and `download plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest` with constraints, call `DownloadPlanningService`, and render the returned `FluxResult`. The CLI does not implement planning logic, download execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
+
+Transfer planning CLI commands are adapters over `TransferPlanningService`: `transfer plan fake track` and `transfer plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest`, call `DownloadPlanningService` to get a `DownloadPlan`, then call `TransferPlanningService` to get a `QueuePlan`, and render the returned `FluxResult`. The CLI does not implement planning logic, transfer execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
 
 ## Future Controllers
 

@@ -7,6 +7,7 @@ from .musiclab import MusicLabService
 from .reports import ReportService
 from .scoring import CandidateScoringService
 from .search import SearchService
+from .transfers import TransferPlanningService
 from .workspace import WorkspaceService
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "MusicLabService",
     "ReportService",
     "SearchService",
+    "TransferPlanningService",
     "WorkspaceService",
 ]
