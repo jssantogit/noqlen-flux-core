@@ -11,7 +11,7 @@ from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
 
 
@@ -211,6 +211,21 @@ def build_parser() -> argparse.ArgumentParser:
     fileops_demo_mode.add_argument("--dry-run", action="store_true", help="Plan operations without executing them")
     fileops_demo_mode.add_argument("--apply", action="store_true", help="Execute planned operations within workspace")
     fileops_demo.set_defaults(func=run_fileops_demo)
+
+    handoff = subparsers.add_parser("handoff", help="Generate safe handoff manifests for future Forge integration")
+    handoff_subparsers = handoff.add_subparsers(dest="handoff_command")
+
+    handoff_demo = handoff_subparsers.add_parser("demo", help="Generate a safe demo handoff manifest")
+    handoff_demo.add_argument("--workspace", required=True, help="Workspace root path")
+    handoff_demo_mode = handoff_demo.add_mutually_exclusive_group()
+    handoff_demo_mode.add_argument("--dry-run", action="store_true", help="Preview manifest without writing a file")
+    handoff_demo_mode.add_argument("--apply", action="store_true", help="Write the manifest inside workspace/manifests")
+    handoff_demo.set_defaults(func=run_handoff_demo)
+
+    handoff_validate = handoff_subparsers.add_parser("validate", help="Validate a demo handoff manifest")
+    handoff_validate.add_argument("--workspace", required=True, help="Workspace root path")
+    handoff_validate.add_argument("--demo", action="store_true", help="Validate a demo manifest")
+    handoff_validate.set_defaults(func=run_handoff_validate)
 
     return parser
 
@@ -653,6 +668,41 @@ def run_fileops_demo(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_handoff_demo(args: argparse.Namespace) -> int:
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.services import HandoffManifestService
+
+    dry_run = not args.apply
+    config = config_from_env(args.workspace, dry_run=dry_run)
+    service = HandoffManifestService()
+
+    manifest = service.demo_manifest()
+
+    if dry_run:
+        result = service.preview_manifest(config, manifest)
+    else:
+        result = service.write_manifest(config, manifest, dry_run=False)
+
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_handoff_validate(args: argparse.Namespace) -> int:
+    from noqlen_flux.services import HandoffManifestService
+
+    service = HandoffManifestService()
+    manifest = service.demo_manifest()
+    validation = service.validate_manifest(manifest)
+
+    status_label = "valid" if validation.valid else "invalid"
+    lines = [f"Noqlen Flux Core handoff: {status_label}"]
+    lines.append(f"Validation: {len(validation.issues)} issue(s), {len(validation.warnings)} warning(s), {len(validation.errors)} error(s)")
+    for issue in validation.issues:
+        lines.append(f"  [{issue.severity}] {issue.code}: {issue.message}")
+    print("\n".join(lines))
+    return 0 if validation.valid else 1
+
+
 def _resolve_provider(kind: str):
     if kind == "fake":
         return FakeSearchProvider(
@@ -801,6 +851,22 @@ def _render_result(result: FluxResult) -> str:
         failed_count = result.summary.get("failed_count")
         if failed_count is not None:
             lines.append(f"failed: {failed_count}")
+    if result.operation == "handoff":
+        handoff_version = result.summary.get("handoff_version")
+        if handoff_version is not None:
+            lines.append(f"handoff_version: {handoff_version}")
+        manifest_filename = result.summary.get("manifest_filename")
+        if manifest_filename is not None:
+            lines.append(f"manifest: {manifest_filename}")
+        dry_run_flag = result.summary.get("dry_run")
+        if dry_run_flag is not None:
+            lines.append(f"dry_run: {dry_run_flag}")
+        applied_changes = result.summary.get("applied_changes")
+        if applied_changes is not None:
+            lines.append(f"applied: {applied_changes}")
+        planned_changes = result.summary.get("planned_changes")
+        if planned_changes is not None:
+            lines.append(f"planned: {planned_changes}")
     return "\n".join(lines)
 
 

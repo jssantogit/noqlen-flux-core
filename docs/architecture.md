@@ -202,79 +202,45 @@ Safety constraints:
 
 The separation must remain: staging (planned intention) → staging execution (orchestrated workflow) → fileops (concrete operations) → safe executor (real execution). `StagingPlanService` does not execute `StagingExecutionService` automatically. `StagingExecutionService` consumes `StagingPlan` but does not alter staging or routing results.
 
-## Quality Analysis And Routing (Future)
+## Handoff Manifest Foundation
 
-Post-download quality analysis and routing will continue to evolve as separate layers from pre-download scoring:
+Handoff manifest is the file-based contract for the future Flux -> Forge handoff boundary. Flux generates a safe, versioned, and auditable manifest from structured pipeline data. Forge will consume the manifest for metadata correction, enrichment, import orchestration, and library organization. Flux does not correct final library metadata; Forge does not download.
 
-- `QualityResult` — structured result from audio file inspection (ffmpeg, transcode analysis, spectrogram heuristics, decode health, clipping, low-pass detection).
-- `QualityFinding` — individual observations such as spectral cutoffs, codec artifacts, or declared-vs-actual mismatches.
-- `QualityGrade` — summary classification: `excellent` / `medium` / `bad`. This is NOT `CandidateRisk`.
-- `RoutingDecision` — a separate service layer that combines `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration to produce decisions: `approved` / `quarantine` / `rejected` / `delete_eligible`.
-- `StagingPlan` — a separate service layer that translates `RoutingDecision` outcomes into planned filesystem changes: target area, relative path, and planned action.
-- `calibration_profile` — MusicLab sessions that tune scoring weights, quality heuristics, and routing thresholds against controlled fixtures before any real provider or download behavior is active.
-- `StagingExecutor` — a future layer that applies real filesystem changes (move, copy, mark) only with explicit `--apply` mode and safety checks.
+Flux owns these handoff models:
 
-Pre-download scoring (`CandidateScore`, `CandidateRisk`) must not grow into audio quality, routing, or staging decisions. The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (planned decision) → staging (planned filesystem change) → executor (real execution).
+- `HandoffManifestVersion` — manifest version, starting at 1.
+- `HandoffSource` — source identification with name, optional version, optional job_id, created_at timestamp, and safe metadata.
+- `HandoffItemType` — item type: `track`, `album`, `unknown`.
+- `HandoffItemStatus` — item status: `approved`, `quarantine`, `rejected`, `review`, `delete_eligible`, `unknown`.
+- `HandoffPathRef` — relative path reference with optional workspace_area, description, and safe metadata.
+- `HandoffReportRef` — report reference with kind, optional relative_path, description, and safe metadata.
+- `HandoffQualityRef` — quality reference with grade, optional confidence, finding counts, and safe metadata.
+- `HandoffRoutingRef` — routing reference with outcome, action_type, reason_count, and safe metadata.
+- `HandoffCandidateRef` — candidate reference with optional candidate_id, provider, risk, score, and safe metadata.
+- `HandoffItem` — structured handoff entry with item_id, item_type, status, path, optional query_metadata, candidate, quality, routing, reports, warnings, errors, and safe metadata.
+- `HandoffManifest` — aggregate manifest with handoff_version, source, items, reports, warnings, errors, and safe metadata.
+- `HandoffValidationIssue` — validation issue with code, message, severity, optional item_id, and safe metadata.
+- `HandoffValidationResult` — validation result with valid flag, issues, warnings, errors, and safe metadata.
 
-## Result Contracts
+`HandoffManifestService` provides service-level manifest building, validation, preview, and writing. It does not access the network, download files, call Forge, or know about `slskd`.
 
-Flux services return structured `FluxResult` objects composed of statuses, steps, warnings, errors, artifacts, planned changes, applied changes, summaries, and timestamps. These contracts are serializable with safe `to_dict()` and `to_json()` methods so future controllers can consume data without scraping terminal output.
+Handoff manifest logic:
 
-## Service Boundary
+- `build_manifest` creates a versioned, safe manifest structure from items and optional source/metadata.
+- `validate_manifest` checks manifest version, item_id presence, valid status, relative paths, no absolute paths, no traversal, no forbidden fields (secrets, full_lyrics, fingerprints, raw_provider_payload).
+- `preview_manifest` (dry-run): does not write any file; returns `PlannedChange` and a logical manifest artifact.
+- `write_manifest` (apply): writes JSON only inside `workspace/manifests`; creates manifests dir if needed and safe; blocks symlink escape, path traversal, dangerous filenames; returns `AppliedChange` only when file is written.
 
-Services must not depend on `argparse`, terminal formatting, `print()`, `input()`, Rich, Click, or UI concerns. They should express workflow state through result objects and keep side-effect policy explicit.
+Safety constraints:
 
-`WorkspaceService` owns workspace inspection, dry-run planning, apply-mode directory creation, and path safety enforcement. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, warnings, and errors instead of terminal output.
+- Manifests must not contain secrets, full lyrics, raw fingerprints, or raw provider payloads.
+- Paths must be relative to the workspace when possible.
+- Manifest files are confined to `workspace/manifests`.
+- Dry-run is the default; apply requires explicit `--apply` flag.
+- No real Forge integration is implemented.
+- No real import, cleanup, or auto-delete behavior exists.
 
-`ReportService` owns report preview and writing. It builds JSON or text reports from `FluxResult` objects, returns planned or applied changes, and exposes report files as service artifacts. Report generation belongs to core services, not to the CLI.
-
-`MusicLabService` owns the isolated calibration lab under `workspace/musiclab`. It validates the lab layout, plans or creates MusicLab directories, creates safe sessions, and writes only controlled fake fixtures. It returns `FluxResult`, `StepResult`, `PlannedChange`, `AppliedChange`, and `Artifact` objects; it does not print, parse CLI arguments, access providers, create audio, call the network, or touch a real music library.
-
-`SearchService` owns the service-first search flow. It accepts a `SearchQuery` and any `SearchProvider`, calls the provider contract, and returns a `FluxResult` with steps, warnings, errors, summary data, and logical candidate artifacts. It does not download, create files, score quality, access the network, or know whether the provider is fake, `slskd`, or native Soulseek.
-
-`CandidateScoringService` owns pre-download candidate scoring. It accepts `SearchQuery` and `SearchCandidate` data, returns structured scores, and can be invoked by `SearchService` only as an optional collaborator. It does not call providers, download files, create files, inspect audio, or know anything about `slskd`.
-
-`DownloadPlanningService` owns download planning. It accepts `DownloadRequest` built from `SearchCandidate` and optional `CandidateScore`, applies `DownloadConstraint` rules, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer.
-
-`TransferPlanningService` owns transfer/queue planning. It accepts `DownloadPlan` from the download planning domain, converts `DownloadItem` objects into `TransferItem` and `QueueItem` objects, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Queue plans are inherently dry-run; real execution will come in a separate future layer with an isolated `TransferProvider` adapter.
-
-`ProviderService` owns provider inspection, health checks, and capability validation. It accepts any `BaseProvider`, calls `health()` and `capabilities()`, and returns `FluxResult` with structured steps, warnings, errors, and logical artifacts. It does not access the network, download files, create files, or know about `slskd`.
-
-`QualityService` owns post-download quality evaluation and summarization. It accepts structured fake data (item_id, optional relative_path, grade, findings, profile) and returns `FluxResult` with steps, warnings, errors, and logical quality artifacts. It does not download files, create files, access the network, read audio, use ffmpeg, perform transcode analysis, call providers, or know about `slskd`. It does not decide routing, quarantine, rejection, or deletion. Quality analysis is inherently contracts-only at this stage; real audio inspection will come in a separate future layer.
-
-`RoutingDecisionService` owns post-download routing decision planning. It accepts `QualityResult` objects and optional `RoutingPolicy`, returns `RoutingDecision` or `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, move files, delete files, call providers, or know about `slskd`. It does not execute real routing actions; all decisions are planned-only. Real execution will come in a separate future layer with explicit apply mode and safety checks.
-
-`StagingPlanService` owns post-download staging plan preparation. It accepts `RoutingPlan` or `RoutingDecision` objects and optional `StagingPolicy`, returns `StagingItem` or `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, move files, delete files, copy files, call providers, or know about `slskd`. It does not execute real staging actions; all changes are planned-only. Real execution will come in a separate future executor layer with explicit apply mode and safety checks.
-
-## File Operation Executor Foundation
-
-File operation execution is a separate core domain from staging plan. `StagingPlan` describes the intention; `FileOperationPlan` describes the concrete filesystem operations that can be performed. `SafeFileOperationService` applies operations only with explicit policy configuration and `--apply` mode.
-
-Flux owns these file operation models:
-
-- `FileOperationType` — operation type: `copy`, `move`, `mark`, `mkdir`, `none`.
-- `FileOperationState` — operation state: `planned`, `skipped`, `applied`, `failed`, `blocked`.
-- `FileOperation` — single operation with operation_id, operation_type, optional source_relative_path, optional target_relative_path, reason, and safe metadata.
-- `FileOperationPlan` — aggregate plan with plan_id, operations, warnings, errors, and safe metadata.
-- `FileOperationResult` — execution result for a single operation: operation_id, operation_type, state, optional source/target paths, message, warnings, errors, and safe metadata.
-- `FileExecutionPolicy` — versioned policy with name, version, description, `allow_move` (default false), `allow_copy` (default true), `allow_mkdir` (default true), `allow_delete` (default false), `allow_overwrite` (default false), and safe metadata.
-
-`SafeFileOperationService` provides service-level file operation planning and execution. It accepts `StagingPlan` or `FileOperationPlan` objects and returns `FluxResult` with `PlannedChange` and `AppliedChange` objects. It does not access the network, delete files, or know about `slskd`.
-
-File operation execution logic:
-
-- Dry-run (default): no files are created, moved, copied, or deleted. Returns `PlannedChange` with state `planned`, `skipped`, or `blocked`.
-- Apply mode (explicit `--apply`): operations are executed within the workspace boundary only. Mkdir, copy, and move are allowed per policy. Overwrite is blocked by default. Source must exist for copy/move. Symlink escape is blocked. Absolute paths and path traversal are blocked. Protected roots are blocked. Returns `AppliedChange` for successfully applied operations.
-- Delete is not implemented in this commit. `mark` operations only flag items as delete-eligible without touching the filesystem.
-
-`StagingPlan` to `FileOperationPlan` conversion:
-
-- `StagingActionType.move` → `FileOperationType.move`, applied only if `policy.allow_move=true`.
-- `StagingActionType.copy` → `FileOperationType.copy`, applied only if `policy.allow_copy=true`.
-- `StagingActionType.mark_delete_eligible` → `FileOperationType.mark`, no real delete.
-- `StagingActionType.plan_only` / `none` → `FileOperationType.none` or skipped.
-
-The separation must remain: staging (planned intention) → fileops (concrete operations) → executor (real execution). `StagingPlanService` does not execute `SafeFileOperationService` automatically. `SafeFileOperationService` consumes `StagingPlan`/`FileOperationPlan` but does not alter staging or routing results.
+The separation must remain: Flux generates the manifest; Forge consumes it. Flux does not correct final metadata; Forge does not download. The handoff is a file-based boundary, not a CLI output dependency or a real integration.
 
 ## MusicLab
 
@@ -311,6 +277,8 @@ Routing CLI commands are adapters over `RoutingDecisionService`: `routing fake e
 Staging CLI commands are adapters over `StagingPlanService` and `StagingExecutionService`: `staging fake approved`, `staging fake quarantine`, `staging fake rejected`, `staging fake delete-eligible`, and `staging fake review` simulate post-download staging plans from fake routing decisions, call `StagingPlanService`, render the returned `FluxResult`, and choose the process exit code. `staging execute fake-approved --workspace PATH --dry-run` plans staging execution without altering the filesystem, while `staging execute fake-approved --workspace PATH --apply` executes copy operations within the workspace boundary using a small fake demo file. The CLI does not implement staging logic, move files, delete files, copy real music files, or perform real staging outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
 
 Fileops CLI commands are adapters over `SafeFileOperationService`: `fileops demo --workspace PATH --dry-run` plans safe filesystem operations without executing them, while `fileops demo --workspace PATH --apply` executes mkdir/copy/move operations within the workspace boundary per policy. The CLI does not implement file operation logic, delete files, or perform operations outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
+
+Handoff CLI commands are adapters over `HandoffManifestService`: `handoff demo --workspace PATH --dry-run` previews a safe demo handoff manifest without writing a file, while `handoff demo --workspace PATH --apply` writes the manifest JSON inside `PATH/manifests`. `handoff validate --workspace PATH --demo` validates a demo manifest. The CLI does not implement manifest logic, call Forge, perform real import, or touch a real music library. Default behavior is dry-run; `--apply` must be explicit.
 
 ## Future Controllers
 

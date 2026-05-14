@@ -418,3 +418,34 @@ def test_staging_execute_fake_delete_eligible_dry_run_works(tmp_path, capsys) ->
     assert "staging-execution:" in output
     assert "mode: dry-run" in output
     assert not workspace.exists()
+
+
+def test_handoff_demo_dry_run_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["handoff", "demo", "--workspace", str(workspace), "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "handoff:" in output
+    assert "dry_run: True" in output
+    assert not (workspace / "manifests").exists()
+
+
+def test_handoff_demo_apply_works(tmp_path, capsys) -> None:
+    workspace = tmp_path / "flux-workspace"
+
+    assert main(["handoff", "demo", "--workspace", str(workspace), "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "handoff:" in output
+    assert "dry_run: False" in output
+    assert (workspace / "manifests").is_dir()
+    manifest_files = list((workspace / "manifests").glob("*.json"))
+    assert len(manifest_files) == 1
+
+
+def test_handoff_validate_demo_works(capsys) -> None:
+    assert main(["handoff", "validate", "--workspace", "/tmp/noqlen-flux-handoff-test", "--demo"]) == 0
+
+    output = capsys.readouterr().out
+    assert "handoff: valid" in output

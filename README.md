@@ -30,6 +30,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Post-download staging plan contracts and fake planning service (`StagingArea`, `StagingItem`, `StagingPlan`, `StagingPolicy`, `StagingPlanService`).
 - Safe filesystem operation executor with dry-run/apply safety (`FileOperationType`, `FileOperationState`, `FileOperation`, `FileOperationPlan`, `FileOperationResult`, `FileExecutionPolicy`, `SafeFileOperationService`).
 - Safe staging execution workflow connecting `StagingPlan` with `SafeFileOperationService` (`StagingExecutionPolicy`, `StagingExecutionSummary`, `StagingExecutionService`).
+- Safe handoff manifest foundation for future Flux -> Forge contract (`HandoffManifest`, `HandoffItem`, `HandoffManifestService`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -294,3 +295,21 @@ noqlen-flux fileops demo --workspace ./flux-workspace --apply
 ```
 
 This is not real cleanup, auto-delete, or music library management. Flux still has no real download, no `slskd`, no ffmpeg, no quality analysis, and no handoff. All file operations are confined to the workspace root with path containment, symlink protection, and protected-root checks.
+
+## Handoff Manifest Foundation
+
+Handoff manifest is the file-based contract for the future Flux -> Forge handoff boundary. Flux generates a safe, versioned, and auditable manifest from structured pipeline data. Forge will consume the manifest for metadata correction, enrichment, import orchestration, and library organization.
+
+Preview a demo handoff manifest without writing a file:
+
+```bash
+noqlen-flux handoff demo --workspace ./flux-workspace --dry-run
+```
+
+Apply mode must be explicit before a manifest is written:
+
+```bash
+noqlen-flux handoff demo --workspace ./flux-workspace --apply
+```
+
+Manifests are confined to `workspace/manifests` and do not contain secrets, full lyrics, raw fingerprints, or raw provider payloads. This is not real Forge integration, import, cleanup, or music library management.
