@@ -12,7 +12,7 @@ from noqlen_flux.quality import (
     QualityResult,
     QualitySummary,
 )
-from noqlen_flux.results import Artifact, FluxResult, FluxWarning, Status
+from noqlen_flux.results import Artifact, FluxError, FluxResult, FluxWarning, Severity, Status
 from noqlen_flux.services.base import FluxService
 
 
@@ -28,7 +28,7 @@ class QualityService(FluxService):
         profile: QualityProfile | None = None,
     ) -> FluxResult:
         warnings: list[FluxWarning] = []
-        errors: list[FluxWarning] = []
+        errors: list[FluxError] = []
 
         selected_profile = profile or DEFAULT_QUALITY_PROFILE
         selected_grade = QualityGrade(grade) if grade else QualityGrade.UNKNOWN
@@ -89,7 +89,7 @@ class QualityService(FluxService):
                 self.warning(
                     "objective-failure-detected",
                     f"{len(objective_failures)} objective failure(s) found.",
-                    severity=Status.WARNING,
+                    severity=Severity.WARNING,
                     item_id=item_id,
                 )
             )
@@ -100,7 +100,7 @@ class QualityService(FluxService):
                 self.warning(
                     "heuristic-warning-detected",
                     f"{len(heuristic_warnings_list)} heuristic warning(s) found.",
-                    severity=Status.WARNING,
+                    severity=Severity.WARNING,
                     item_id=item_id,
                 )
             )
