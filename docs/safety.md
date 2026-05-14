@@ -77,6 +77,20 @@ Heuristics such as exact textual matches, locked file visibility, declared bitra
 
 Automated scoring tests must use fake providers, fake candidates, or controlled fixtures only. They must not use network access, credentials, real downloads, real provider sessions, or personal filesystem paths.
 
+## Download Planning
+
+Download planning is inherently a dry-run operation. It does not download files, create files, access the network, call providers, or interact with any real provider including `slskd`.
+
+Plans are expressed as `DownloadPlan` objects with `PlannedChange` entries, not `AppliedChange`. No file system mutation occurs during planning. Real execution will come in a separate future layer.
+
+Locked files must block items or generate warnings according to the `allow_locked` constraint. When `allow_locked` is false and all files are locked, the plan is blocked. When `allow_locked` is true, locked files are included with a clear warning.
+
+Scoring is not quality. A `require_score_min` constraint blocks plans when the candidate score falls below the threshold, but this is a pre-download risk signal, not a post-download quality decision.
+
+Planning is not routing. `DownloadPlanningService` does not decide approval, rejection, quarantine, or deletion. It only determines whether a download can be planned given the candidate data and constraints.
+
+No test uses real network access or a real music library. All tests use fake providers, fake candidates, temporary directories, or controlled fixtures.
+
 ## Reports
 
 Reports are written only under `workspace/reports`. Report filenames are restricted to safe basename-only values, and traversal such as `../report.json` is rejected. A `reports` symlink that resolves outside the workspace is rejected before writing.

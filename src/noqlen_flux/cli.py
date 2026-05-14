@@ -4,11 +4,12 @@ import argparse
 
 from . import __version__
 from .config import config_from_env
+from .downloads import DownloadConstraint, DownloadIntent, DownloadRequest
 from .providers.fake import FakeSearchProvider
 from .reports import ReportFormat
 from .results import FluxResult, Status
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, DoctorService, MusicLabService, ReportService, SearchService, WorkspaceService
+from .services import CandidateScoringService, DoctorService, DownloadPlanningService, MusicLabService, ReportService, SearchService, WorkspaceService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -103,6 +104,35 @@ def build_parser() -> argparse.ArgumentParser:
     musiclab_fixture_mode.add_argument("--apply", action="store_true", help="Write the fake fixture")
     musiclab_fixture_create.set_defaults(func=run_musiclab_fixture_create)
 
+    download = subparsers.add_parser("download", help="Plan safe download operations")
+    download_subparsers = download.add_subparsers(dest="download_command")
+
+    download_plan = download_subparsers.add_parser("plan", help="Plan a download without executing it")
+    download_plan_subparsers = download_plan.add_subparsers(dest="download_plan_provider")
+
+    download_plan_fake = download_plan_subparsers.add_parser("fake", help="Plan a download from a fake provider")
+    download_plan_fake_subparsers = download_plan_fake.add_subparsers(dest="download_plan_kind")
+
+    download_plan_fake_track = download_plan_fake_subparsers.add_parser("track", help="Plan a fake track download")
+    download_plan_fake_track.add_argument("--artist", required=True, help="Artist name")
+    download_plan_fake_track.add_argument("--title", required=True, help="Track title")
+    download_plan_fake_track.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    download_plan_fake_track.add_argument("--score-min", type=float, help="Minimum score required to plan")
+    download_plan_fake_track.add_argument("--max-files", type=int, help="Maximum files allowed")
+    download_plan_fake_track.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
+    download_plan_fake_track.add_argument("--allow-locked", action="store_true", help="Allow locked files")
+    download_plan_fake_track.set_defaults(func=run_download_plan_fake_track)
+
+    download_plan_fake_album = download_plan_fake_subparsers.add_parser("album", help="Plan a fake album download")
+    download_plan_fake_album.add_argument("--artist", required=True, help="Artist name")
+    download_plan_fake_album.add_argument("--album", required=True, help="Album title")
+    download_plan_fake_album.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    download_plan_fake_album.add_argument("--score-min", type=float, help="Minimum score required to plan")
+    download_plan_fake_album.add_argument("--max-files", type=int, help="Maximum files allowed")
+    download_plan_fake_album.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
+    download_plan_fake_album.add_argument("--allow-locked", action="store_true", help="Allow locked files")
+    download_plan_fake_album.set_defaults(func=run_download_plan_fake_album)
+
     return parser
 
 
@@ -190,16 +220,85 @@ def run_musiclab_fixture_create(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_download_plan_fake_track(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+    provider = _demo_fake_provider()
+    provider_result = provider.search(query)
+    if not provider_result.candidates:
+        result = DownloadPlanningService().result(
+            status=Status.FAILED,
+            error="no candidates found",
+        )
+        print(_render_result(result))
+        return 1
+    candidate = provider_result.candidates[0]
+    score = None
+    if args.score:
+        score = CandidateScoringService().score_candidate(query, candidate)
+    constraints = DownloadConstraint(
+        allow_locked=getattr(args, "allow_locked", False),
+        require_score_min=getattr(args, "score_min", None),
+        max_files=getattr(args, "max_files", None),
+        max_total_bytes=getattr(args, "max_total_bytes", None),
+    )
+    request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{args.artist} - {args.title}",
+        score=score,
+        constraints=constraints,
+    )
+    result = DownloadPlanningService().plan_download(request)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_download_plan_fake_album(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album)
+    provider = _demo_fake_provider()
+    provider_result = provider.search(query)
+    if not provider_result.candidates:
+        result = DownloadPlanningService().result(
+            status=Status.FAILED,
+            error="no candidates found",
+        )
+        print(_render_result(result))
+        return 1
+    candidate = provider_result.candidates[0]
+    score = None
+    if args.score:
+        score = CandidateScoringService().score_candidate(query, candidate)
+    constraints = DownloadConstraint(
+        allow_locked=getattr(args, "allow_locked", False),
+        require_score_min=getattr(args, "score_min", None),
+        max_files=getattr(args, "max_files", None),
+        max_total_bytes=getattr(args, "max_total_bytes", None),
+    )
+    request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.ALBUM,
+        query=f"{args.artist} - {args.album}",
+        score=score,
+        constraints=constraints,
+    )
+    result = DownloadPlanningService().plan_download(request)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _render_result(result: FluxResult) -> str:
     lines = [f"Noqlen Flux Core {result.operation}: {result.status.value}"]
     lines.extend(step.message for step in result.steps if step.message)
     lines.extend(f"planned: {change.action} {change.target}" for change in result.planned_changes)
     lines.extend(f"applied: {change.action} {change.target}" for change in result.applied_changes)
     lines.extend(f"error: {error.code}: {error.message}" for error in result.errors)
-    lines.extend(
-        f"score: {score['candidate_id']} total={score['total']}/{score['max_score']} risk={score['risk']}"
-        for score in result.summary.get("scores", [])
-    )
+    lines.extend(f"score: {score['candidate_id']} total={score['total']}/{score['max_score']} risk={score['risk']}" for score in result.summary.get("scores", []))
+    blocked = result.summary.get("blocked")
+    if blocked:
+        lines.extend(f"blocked: {reason}" for reason in result.summary.get("block_reasons", []))
+    item_count = result.summary.get("item_count")
+    if item_count is not None:
+        lines.append(f"items: {item_count}")
     return "\n".join(lines)
 
 

@@ -36,6 +36,20 @@ Scoring is explainable and calibrable. Every score should be backed by component
 
 The core remains provider-neutral. A future `slskd` provider or `NativeSoulseekProvider` must translate provider output into `SearchCandidate`; scoring must continue to depend on Flux models rather than external provider internals.
 
+## Download Planning
+
+Download planning is a separate core domain that transforms scored `SearchCandidate` objects into structured `DownloadPlan` objects. It does not execute transfers, create files, access the network, or interact with any real provider.
+
+The flow is: `SearchProvider` returns `SearchCandidate` → `CandidateScoringService` produces `CandidateScore` → `DownloadPlanningService` creates `DownloadPlan`.
+
+Download planning owns these models: `DownloadIntent`, `DownloadItem`, `DownloadConstraint`, `DownloadRequest`, `DownloadPlan`, and `DownloadPlanArtifact`. All models are Flux-owned and do not depend on any provider-specific names or internals.
+
+`DownloadPlanningService` applies constraints such as `max_files`, `max_total_bytes`, `allow_locked`, `require_score_min`, and `allowed_extensions`. It blocks plans when candidates have no files, all files are locked with `allow_locked=false`, scores fall below the minimum, extensions are not permitted, or file/size limits are exceeded.
+
+Plans use `PlannedChange` objects, not `AppliedChange`. Download planning is inherently a dry-run operation. Real execution will come in a separate future layer.
+
+A future `slskd` adapter and a future `NativeSoulseekProvider` must both be compatible with this planning layer. The service accepts `SearchCandidate` and `CandidateScore` from the Flux domain and returns `DownloadPlan` without knowing which provider produced the candidate.
+
 ## Quality Analysis And Routing (Future)
 
 Post-download quality analysis and routing will be separate layers from pre-download scoring:
@@ -66,6 +80,8 @@ Services must not depend on `argparse`, terminal formatting, `print()`, `input()
 
 `CandidateScoringService` owns pre-download candidate scoring. It accepts `SearchQuery` and `SearchCandidate` data, returns structured scores, and can be invoked by `SearchService` only as an optional collaborator. It does not call providers, download files, create files, inspect audio, or know anything about `slskd`.
 
+`DownloadPlanningService` owns download planning. It accepts `DownloadRequest` built from `SearchCandidate` and optional `CandidateScore`, applies `DownloadConstraint` rules, and returns a `FluxResult` with `PlannedChange` objects. It does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.
@@ -89,6 +105,8 @@ Report CLI commands are adapters over `ReportService`: `report demo --workspace 
 MusicLab CLI commands are adapters over `MusicLabService`: `musiclab inspect`, `musiclab init`, `musiclab session create`, and `musiclab fixture create` parse arguments, call the service, render the result, and choose the process exit code. Default behavior remains dry-run unless `--apply` is explicit.
 
 Search CLI commands are adapters over `SearchService`: `search fake track` and `search fake album` build `SearchQuery` objects, instantiate only the safe in-memory fake provider, optionally attach `CandidateScoringService` for `--score`, render the returned `FluxResult`, and choose the process exit code. The CLI does not implement provider logic, scoring logic, or download behavior.
+
+Download planning CLI commands are adapters over `DownloadPlanningService`: `download plan fake track` and `download plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest` with constraints, call `DownloadPlanningService`, and render the returned `FluxResult`. The CLI does not implement planning logic, download execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
 
 ## Future Controllers
 

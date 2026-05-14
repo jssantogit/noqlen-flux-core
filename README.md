@@ -20,6 +20,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - An isolated MusicLab foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration.
 - Generic search domain models, provider contracts, and an in-memory fake provider for offline search-flow tests.
 - Explainable pre-download candidate scoring models and services using Flux-owned search candidates.
+- Download planning models and services that transform candidates into structured plans without executing transfers.
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
 
@@ -116,3 +117,23 @@ noqlen-flux search fake album --artist "Example Artist" --album "Example Album" 
 ```
 
 This is not real audio quality analysis. Flux still has no real `slskd` integration, native Soulseek provider, real download, queue, transfer, routing, quarantine, cleanup, or music library write behavior.
+
+## Download Planning Foundation
+
+Download planning transforms scored search candidates into structured download plans without executing any transfer. Plans are inherently dry-run and use `PlannedChange` objects, not `AppliedChange`.
+
+Plan a fake track download:
+
+```bash
+noqlen-flux download plan fake track --artist "Example Artist" --title "Example Track"
+```
+
+Plan a fake album download:
+
+```bash
+noqlen-flux download plan fake album --artist "Example Artist" --album "Example Album"
+```
+
+Planning supports constraints such as `--score-min`, `--max-files`, `--max-total-bytes`, and `--allow-locked`. These affect only the plan, never execution.
+
+There is no real download, no queue, no transfer, no `slskd`, and no filesystem write beyond the workspace safety boundary. Real execution will come in a separate future commit.
