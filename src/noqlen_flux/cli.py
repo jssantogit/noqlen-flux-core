@@ -421,10 +421,20 @@ def build_parser() -> argparse.ArgumentParser:
     handoff_demo_mode.add_argument("--apply", action="store_true", help="Write the manifest inside workspace/manifests")
     handoff_demo.set_defaults(func=run_handoff_demo)
 
-    handoff_validate = handoff_subparsers.add_parser("validate", help="Validate a demo handoff manifest")
+    handoff_validate = handoff_subparsers.add_parser("validate", help="Validate a handoff manifest (demo or file-based)")
     handoff_validate.add_argument("--workspace", required=True, help="Workspace root path")
-    handoff_validate.add_argument("--demo", action="store_true", help="Validate a demo manifest")
+    handoff_validate_source = handoff_validate.add_mutually_exclusive_group(required=True)
+    handoff_validate_source.add_argument("--demo", action="store_true", help="Validate a demo manifest")
+    handoff_validate_source.add_argument("--manifest", help="Relative path to an existing manifest file inside workspace")
     handoff_validate.set_defaults(func=run_handoff_validate)
+
+    handoff_apply = handoff_subparsers.add_parser("apply", help="Apply handoff manifest for Forge bridge (file-based, controlled)")
+    handoff_apply.add_argument("--workspace", required=True, help="Workspace root path")
+    handoff_apply.add_argument("--manifest", required=True, help="Relative path to manifest file inside workspace (e.g. manifests/handoff-xxx.json)")
+    handoff_apply_mode = handoff_apply.add_mutually_exclusive_group(required=True)
+    handoff_apply_mode.add_argument("--dry-run", action="store_true", help="Preview apply without executing")
+    handoff_apply_mode.add_argument("--apply", action="store_true", help="Execute handoff apply bridge")
+    handoff_apply.set_defaults(func=run_handoff_apply)
 
     cleanup = subparsers.add_parser("cleanup", help="Plan safe cleanup operations (planned-only, no execution)")
     cleanup_subparsers = cleanup.add_subparsers(dest="cleanup_command")
@@ -1697,8 +1707,32 @@ def run_handoff_validate(args: argparse.Namespace) -> int:
     from noqlen_flux.services import HandoffManifestService
 
     service = HandoffManifestService()
-    manifest = service.demo_manifest()
-    validation = service.validate_manifest(manifest)
+
+    if args.manifest:
+        from .config import config_from_env
+        config = config_from_env(args.workspace, dry_run=True)
+        result = service.load_manifest_from_file(
+            config.workspace_root,
+            args.manifest,
+            protected_roots=config.protected_roots,
+        )
+        if result.status == Status.FAILED:
+            print(_render_result(result))
+            return _exit_code(result.status)
+        manifest_data = result.summary.get("manifest", {})
+        items_raw = manifest_data.get("items", [])
+        items: list[Any] = []
+        for item_data in items_raw:
+            try:
+                from .services.handoff import _parse_handoff_item
+                items.append(_parse_handoff_item(item_data))
+            except (KeyError, ValueError):
+                continue
+        manifest = service.build_manifest(items=items)
+        validation = service.validate_manifest(manifest)
+    else:
+        manifest = service.demo_manifest()
+        validation = service.validate_manifest(manifest)
 
     status_label = "valid" if validation.valid else "invalid"
     lines = [f"Noqlen Flux Core handoff: {status_label}"]
@@ -1707,6 +1741,19 @@ def run_handoff_validate(args: argparse.Namespace) -> int:
         lines.append(f"  [{issue.severity}] {issue.code}: {issue.message}")
     print("\n".join(lines))
     return 0 if validation.valid else 1
+
+
+def run_handoff_apply(args: argparse.Namespace) -> int:
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.services import HandoffManifestService
+
+    dry_run = not args.apply
+    config = config_from_env(args.workspace, dry_run=dry_run)
+    service = HandoffManifestService()
+
+    result = service.apply_manifest(config, args.manifest, dry_run=dry_run)
+    print(_render_result(result))
+    return _exit_code(result.status)
 
 
 def run_cleanup_plan_fake(args: argparse.Namespace) -> int:
