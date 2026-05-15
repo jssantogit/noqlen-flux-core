@@ -739,6 +739,116 @@ class HandoffManifestService(FluxService):
         ).finish()
 
 
+class HandoffApplyBridge(FluxService):
+    operation = "handoff-apply-bridge"
+
+    def __init__(self) -> None:
+        self._manifest_service = HandoffManifestService()
+
+    def bridge(
+        self,
+        config: FluxConfig,
+        manifest_path: str,
+        *,
+        dry_run: bool = True,
+    ) -> FluxResult:
+        apply_result = self._manifest_service.apply_manifest(
+            config, manifest_path, dry_run=dry_run,
+        )
+
+        if apply_result.status == Status.FAILED:
+            return apply_result
+
+        report_data = apply_result.summary.get("report", {})
+        if dry_run:
+            return apply_result
+
+        try:
+            safe_workspace_root(
+                config.workspace_root,
+                protected_roots=config.protected_roots,
+            )
+        except PathSafetyError as exc:
+            return self._error_result(exc.code, exc.message, exc.context)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        report_filename = f"handoff-apply-{timestamp}.json"
+        reports_dir = ensure_within_workspace(
+            config.workspace_root / "reports",
+            config.workspace_root,
+            protected_roots=config.protected_roots,
+        )
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_target = ensure_within_workspace(
+            reports_dir / report_filename,
+            config.workspace_root,
+            protected_roots=config.protected_roots,
+        )
+
+        try:
+            import json as _json
+            report_target.write_text(
+                _json.dumps(report_data, sort_keys=True, separators=(",", ":"), default=str),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return self._error_result(
+                "bridge-report-write-error",
+                f"Could not write apply report: {exc}",
+                {"path": str(report_target)},
+            )
+
+        applied_change = AppliedChange(
+            action="write-handoff-apply-report",
+            target=str(report_target),
+            result="written",
+            metadata={"report_filename": report_filename},
+        )
+
+        report_artifact = Artifact(
+            kind="handoff-apply-report-file",
+            description="Written handoff apply bridge report",
+            path=report_target,
+            metadata={
+                "applied": apply_result.summary.get("applied", 0),
+                "blocked": apply_result.summary.get("blocked", 0),
+                "skipped": apply_result.summary.get("skipped", 0),
+            },
+        )
+
+        step = self.step(
+            "bridge-report-write",
+            Status.SUCCESS,
+            f"Wrote handoff apply report: {report_filename}",
+            artifacts=[report_artifact],
+        )
+
+        return FluxResult(
+            operation=self.operation,
+            status=apply_result.status,
+            steps=[step],
+            artifacts=[report_artifact],
+            applied_changes=[applied_change],
+            summary={
+                **apply_result.summary,
+                "report_file": str(report_target),
+                "report_filename": report_filename,
+                "bridge_complete": True,
+            },
+        ).finish()
+
+    def _error_result(self, code: str, message: str, context: dict[str, str] | None = None) -> FluxResult:
+        error = self.error(code, message, **(context or {}))
+        step = self.step("bridge-error", Status.FAILED, message, errors=[error])
+        return FluxResult(
+            operation=self.operation,
+            status=Status.FAILED,
+            steps=[step],
+            errors=[error],
+            summary={"error_code": code},
+        ).finish()
+
+
 def _safe_manifest_filename(manifest: HandoffManifest) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     candidate = f"handoff-{timestamp}.json"

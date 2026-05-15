@@ -1745,13 +1745,13 @@ def run_handoff_validate(args: argparse.Namespace) -> int:
 
 def run_handoff_apply(args: argparse.Namespace) -> int:
     from noqlen_flux.config import config_from_env
-    from noqlen_flux.services import HandoffManifestService
+    from noqlen_flux.services.handoff import HandoffApplyBridge
 
     dry_run = not args.apply
     config = config_from_env(args.workspace, dry_run=dry_run)
-    service = HandoffManifestService()
+    bridge = HandoffApplyBridge()
 
-    result = service.apply_manifest(config, args.manifest, dry_run=dry_run)
+    result = bridge.bridge(config, args.manifest, dry_run=dry_run)
     print(_render_result(result))
     return _exit_code(result.status)
 
