@@ -288,7 +288,8 @@ def test_service_does_not_import_forge() -> None:
     from noqlen_flux.services import handoff as module
 
     source = inspect.getsource(module)
-    assert "forge" not in source.lower()
+    assert "import forge" not in source.lower()
+    assert "from forge" not in source.lower()
 
 
 def test_service_does_not_import_slskd() -> None:

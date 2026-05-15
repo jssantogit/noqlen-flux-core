@@ -33,6 +33,17 @@ class HandoffItemStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class HandoffApplyMode(StrEnum):
+    DRY_RUN = "dry_run"
+    APPLY = "apply"
+
+
+class HandoffApplyItemOutcome(StrEnum):
+    APPLIED = "applied"
+    BLOCKED = "blocked"
+    SKIPPED = "skipped"
+
+
 _FORBIDDEN_FIELDS = (
     "full_lyrics",
     "lyrics",
@@ -46,6 +57,15 @@ _FORBIDDEN_FIELDS = (
     "authorization",
     "cookie",
     "private",
+    "raw_payload_dump",
+    "api_response_body",
+    "set_cookie",
+    "session_token",
+    "refresh_token",
+    "access_key",
+    "api_secret",
+    "credential",
+    "signing_key",
 )
 
 
@@ -179,6 +199,7 @@ class HandoffItem:
     item_type: HandoffItemType
     status: HandoffItemStatus
     path: HandoffPathRef
+    forge_ready: bool = False
     query_metadata: SafeMetadata | None = None
     candidate: HandoffCandidateRef | None = None
     quality: HandoffQualityRef | None = None
@@ -237,6 +258,56 @@ class HandoffValidationIssue:
 class HandoffValidationResult:
     valid: bool
     issues: list[HandoffValidationIssue] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+@dataclass(slots=True, frozen=True)
+class HandoffApplyItemResult:
+    item_id: str
+    outcome: HandoffApplyItemOutcome
+    reason: str = ""
+    forge_ready: bool = False
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+@dataclass(slots=True, frozen=True)
+class HandoffApplyResult:
+    mode: HandoffApplyMode
+    manifest_version: int
+    total_items: int
+    applied: int = 0
+    blocked: int = 0
+    skipped: int = 0
+    item_results: list[HandoffApplyItemResult] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+@dataclass(slots=True, frozen=True)
+class HandoffApplyReport:
+    report_id: str
+    manifest_path: str
+    mode: HandoffApplyMode
+    valid: bool
+    total_items: int
+    applied: int
+    blocked: int
+    skipped: int
+    item_results: list[HandoffApplyItemResult] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     metadata: SafeMetadata = field(default_factory=dict)

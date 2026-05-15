@@ -10,6 +10,11 @@ from typing import Any
 from noqlen_flux.config import FluxConfig
 from noqlen_flux.handoff import (
     HANDOFF_MANIFEST_VERSION,
+    HandoffApplyItemOutcome,
+    HandoffApplyItemResult,
+    HandoffApplyMode,
+    HandoffApplyReport,
+    HandoffApplyResult,
     HandoffCandidateRef,
     HandoffItem,
     HandoffItemStatus,
@@ -357,6 +362,298 @@ class HandoffManifestService(FluxService):
             metadata={"purpose": "demo", "status": "handoff-foundation"},
         )
 
+    def load_manifest_from_file(
+        self,
+        workspace_root: Path,
+        relative_path: str,
+        *,
+        protected_roots: tuple[Path, ...] = (),
+    ) -> FluxResult:
+        try:
+            safe_workspace_root(workspace_root, protected_roots=protected_roots)
+        except PathSafetyError as exc:
+            return self._error_result(exc.code, exc.message, exc.context)
+
+        validated_path = validate_relative_path(relative_path, field_name="relative_path")
+        target = ensure_within_workspace(
+            workspace_root / validated_path,
+            workspace_root,
+            protected_roots=protected_roots,
+        )
+
+        if target.exists() and target.is_symlink():
+            return self._error_result(
+                "unsafe-symlink",
+                "Manifest file must not be a symlink.",
+                {"path": str(target)},
+            )
+
+        try:
+            raw = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            return self._error_result(
+                "manifest-read-error",
+                f"Could not read manifest file: {exc}",
+                {"path": str(target)},
+            )
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return self._error_result(
+                "manifest-parse-error",
+                f"Manifest file is not valid JSON: {exc}",
+                {"path": str(target)},
+            )
+
+        if not isinstance(data, dict):
+            return self._error_result(
+                "manifest-format-error",
+                "Manifest file root must be a JSON object.",
+                {"path": str(target)},
+            )
+
+        version = data.get("handoff_version")
+        if version != HANDOFF_MANIFEST_VERSION:
+            return self._error_result(
+                "manifest-version-mismatch",
+                f"Manifest version {version} is not supported. Expected {HANDOFF_MANIFEST_VERSION}.",
+                {"path": str(target)},
+            )
+
+        items_raw = data.get("items", [])
+        if not isinstance(items_raw, list):
+            return self._error_result(
+                "manifest-items-format-error",
+                "Manifest items must be a JSON array.",
+                {"path": str(target)},
+            )
+
+        items: list[HandoffItem] = []
+        for i, item_data in enumerate(items_raw):
+            if not isinstance(item_data, dict):
+                return self._error_result(
+                    "manifest-item-format-error",
+                    f"Manifest item at index {i} is not a JSON object.",
+                    {"path": str(target)},
+                )
+            try:
+                item = _parse_handoff_item(item_data)
+                items.append(item)
+            except (KeyError, ValueError) as exc:
+                return self._error_result(
+                    "manifest-item-parse-error",
+                    f"Could not parse manifest item at index {i}: {exc}",
+                    {"path": str(target)},
+                )
+
+        manifest = self.build_manifest(items=items)
+        artifact = Artifact(
+            kind="handoff-manifest-loaded",
+            description="Loaded handoff manifest from file",
+            path=target,
+            metadata={
+                "handoff_version": manifest.handoff_version,
+                "item_count": len(manifest.items),
+                "dry_run": True,
+            },
+        )
+        step = self.step(
+            "manifest-load",
+            Status.SUCCESS,
+            f"Loaded manifest: {relative_path}",
+            artifacts=[artifact],
+        )
+        return FluxResult(
+            operation=self.operation,
+            status=Status.SUCCESS,
+            steps=[step],
+            artifacts=[artifact],
+            summary={
+                "manifest_filename": relative_path,
+                "manifest_path": str(target),
+                "handoff_version": manifest.handoff_version,
+                "item_count": len(manifest.items),
+                "dry_run": True,
+                "manifest": manifest.to_dict(),
+            },
+        ).finish()
+
+    def apply_manifest(
+        self,
+        config: FluxConfig,
+        manifest_path: str,
+        *,
+        dry_run: bool = True,
+    ) -> FluxResult:
+        try:
+            safe_workspace_root(
+                config.workspace_root,
+                protected_roots=config.protected_roots,
+            )
+        except PathSafetyError as exc:
+            return self._error_result(exc.code, exc.message, exc.context)
+
+        load_result = self.load_manifest_from_file(
+            config.workspace_root,
+            manifest_path,
+            protected_roots=config.protected_roots,
+        )
+        if load_result.status == Status.FAILED:
+            return load_result
+
+        manifest_data = load_result.summary.get("manifest", {})
+        items_raw = manifest_data.get("items", [])
+        items: list[HandoffItem] = []
+        for item_data in items_raw:
+            try:
+                items.append(_parse_handoff_item(item_data))
+            except (KeyError, ValueError):
+                continue
+
+        mode = HandoffApplyMode.DRY_RUN if dry_run else HandoffApplyMode.APPLY
+        item_results: list[HandoffApplyItemResult] = []
+        applied = 0
+        blocked = 0
+        skipped = 0
+        apply_warnings: list[str] = []
+        apply_errors: list[str] = []
+
+        for item in items:
+            outcome, reason = self._check_forge_ready(item)
+            forge_ready = outcome == HandoffApplyItemOutcome.APPLIED
+            item_warnings: list[str] = []
+            item_errors: list[str] = []
+
+            if outcome == HandoffApplyItemOutcome.APPLIED:
+                applied += 1
+            elif outcome == HandoffApplyItemOutcome.BLOCKED:
+                blocked += 1
+                if reason:
+                    item_errors.append(reason)
+                    apply_errors.append(f"{item.item_id}: {reason}")
+            else:
+                skipped += 1
+                if reason:
+                    item_warnings.append(reason)
+                    apply_warnings.append(f"{item.item_id}: {reason}")
+
+            item_results.append(
+                HandoffApplyItemResult(
+                    item_id=item.item_id,
+                    outcome=outcome,
+                    reason=reason,
+                    forge_ready=forge_ready,
+                    warnings=item_warnings,
+                    errors=item_errors,
+                )
+            )
+
+        apply_result = HandoffApplyResult(
+            mode=mode,
+            manifest_version=HANDOFF_MANIFEST_VERSION,
+            total_items=len(items),
+            applied=applied,
+            blocked=blocked,
+            skipped=skipped,
+            item_results=item_results,
+            warnings=apply_warnings,
+            errors=apply_errors,
+            metadata={
+                "dry_run": dry_run,
+                "manifest_path": manifest_path,
+            },
+        )
+
+        report = HandoffApplyReport(
+            report_id=str(uuid.uuid4()),
+            manifest_path=manifest_path,
+            mode=mode,
+            valid=len(apply_errors) == 0,
+            total_items=len(items),
+            applied=applied,
+            blocked=blocked,
+            skipped=skipped,
+            item_results=item_results,
+            warnings=apply_warnings,
+            errors=apply_errors,
+            metadata={
+                "dry_run": dry_run,
+                "workspace_root": "[workspace-root]",
+            },
+        )
+
+        report_artifact = Artifact(
+            kind="handoff-apply-report",
+            description="Handoff apply bridge report",
+            metadata={"report": report.to_dict()},
+        )
+
+        action = "apply-manifest-dry-run" if dry_run else "apply-manifest"
+        overall_status = Status.WARNING if blocked > 0 or skipped > 0 else Status.SUCCESS
+        if len(apply_errors) > 0:
+            overall_status = Status.WARNING
+
+        planned_changes = []
+        if dry_run:
+            planned_changes.append(
+                PlannedChange(
+                    action="handoff-apply",
+                    target=str(config.workspace_root / manifest_path),
+                    reason="Would apply handoff manifest for Forge bridge",
+                    metadata={"items_applied": applied, "items_blocked": blocked, "items_skipped": skipped},
+                )
+            )
+
+        result = FluxResult(
+            operation="handoff-apply",
+            status=overall_status,
+            artifacts=[report_artifact],
+            planned_changes=planned_changes,
+            summary={
+                "manifest_path": manifest_path,
+                "mode": mode.value,
+                "total_items": len(items),
+                "applied": applied,
+                "blocked": blocked,
+                "skipped": skipped,
+                "valid": report.valid,
+                "dry_run": dry_run,
+                "report": report.to_dict(),
+            },
+        )
+        result.warnings.extend(
+            FluxWarning(code="blocked-item", message=w, severity=Severity.WARNING)
+            for w in apply_warnings
+        )
+        return result.finish()
+
+    def _check_forge_ready(
+        self,
+        item: HandoffItem,
+    ) -> tuple[HandoffApplyItemOutcome, str]:
+        if item.status != HandoffItemStatus.APPROVED:
+            return (
+                HandoffApplyItemOutcome.BLOCKED,
+                f"Item status '{item.status.value}' is not 'approved'. Only approved items can be handed off to Forge.",
+            )
+
+        if item.item_type == HandoffItemType.UNKNOWN:
+            return (
+                HandoffApplyItemOutcome.SKIPPED,
+                "Item has unknown type. Skipping handoff.",
+            )
+
+        issues = self._validate_item(item)
+        error_issues = [i for i in issues if i.severity == "error"]
+        if error_issues:
+            return (
+                HandoffApplyItemOutcome.BLOCKED,
+                f"Item failed validation: {'; '.join(i.message for i in error_issues)}",
+            )
+
+        return (HandoffApplyItemOutcome.APPLIED, "")
+
     def _validate_item(self, item: HandoffItem) -> list[HandoffValidationIssue]:
         issues: list[HandoffValidationIssue] = []
 
@@ -497,3 +794,36 @@ def _resolve_manifest_target(
         )
 
     return target
+
+
+def _parse_handoff_item(data: dict[str, Any]) -> HandoffItem:
+    path_data = data.get("path", {})
+    if not isinstance(path_data, dict):
+        raise ValueError("Item path must be a JSON object")
+    path_ref = HandoffPathRef(
+        relative_path=path_data.get("relative_path", ""),
+        workspace_area=path_data.get("workspace_area"),
+        description=path_data.get("description"),
+        metadata=path_data.get("metadata", {}),
+    )
+    return HandoffItem(
+        item_id=data.get("item_id", ""),
+        item_type=data.get("item_type", "unknown"),
+        status=data.get("status", "unknown"),
+        path=path_ref,
+        forge_ready=data.get("forge_ready", False),
+        query_metadata=data.get("query_metadata"),
+        quality=(
+            HandoffQualityRef(**data["quality"])
+            if isinstance(data.get("quality"), dict)
+            else None
+        ),
+        routing=(
+            HandoffRoutingRef(**data["routing"])
+            if isinstance(data.get("routing"), dict)
+            else None
+        ),
+        warnings=list(data.get("warnings", [])),
+        errors=list(data.get("errors", [])),
+        metadata=data.get("metadata", {}),
+    )

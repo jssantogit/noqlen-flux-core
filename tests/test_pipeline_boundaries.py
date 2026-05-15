@@ -347,7 +347,9 @@ def test_handoff_manifest_does_not_call_forge() -> None:
     )
 
     assert manifest.to_dict()["handoff_version"] == 1
-    assert "forge" not in str(manifest.to_dict()).lower()
+    manifest_str = str(manifest.to_dict()).lower()
+    assert "import forge" not in manifest_str
+    assert "from forge" not in manifest_str
 
     forge_modules = [m for m in sys.modules if "forge" in m.lower()]
     assert len(forge_modules) == 0
