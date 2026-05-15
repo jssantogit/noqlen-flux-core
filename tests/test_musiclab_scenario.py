@@ -508,3 +508,98 @@ class TestScenarioRunner:
         )
         assert result.status == Status.SUCCESS
         assert result.summary.get("actual_grade") == "bad"
+
+    def test_qobuz_like_cutoff_not_quarantined_at_staging(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="qobuz_like_cutoff_9_4khz_decode_ok",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        assert result.status == Status.SUCCESS
+        actual_staging = result.summary.get("actual_staging_area")
+        assert actual_staging != "quarantine", "qobuz_like cutoff must not be auto-quarantined at staging"
+        assert actual_staging != "rejected", "qobuz_like cutoff must not be auto-rejected at staging"
+        assert actual_staging != "delete_eligible", "qobuz_like cutoff must never be delete_eligible"
+
+    def test_lowpass_suspicion_only_not_rejected_or_delete(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="lowpass_suspicion_only",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        assert result.status == Status.SUCCESS
+        actual_staging = result.summary.get("actual_staging_area")
+        assert actual_staging not in ("rejected", "delete_eligible"), \
+            f"Lowpass only must not be {actual_staging}"
+        actual_routing = result.summary.get("actual_routing_outcome")
+        assert actual_routing not in ("rejected", "delete_eligible"), \
+            f"Lowpass only routing must not be {actual_routing}"
+
+    def test_corrupt_decode_failure_never_delete_eligible(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        for scenario_id in ("corrupt-file", "zero-byte", "truncated-file", "lowpass_plus_decode_failure"):
+            result = MusicLabScenarioRunnerService().run_scenario(
+                scenario_id=scenario_id,
+                workspace_root=workspace,
+                dry_run=True,
+            )
+            actual_staging = result.summary.get("actual_staging_area")
+            actual_routing = result.summary.get("actual_routing_outcome")
+            assert actual_staging != "delete_eligible", \
+                f"{scenario_id}: corrupt/decode_failure must not be delete_eligible at staging"
+            assert actual_routing != "delete_eligible", \
+                f"{scenario_id}: corrupt/decode_failure must not route to delete_eligible"
+
+    def test_fake_flac_lowpass_decode_ok_never_delete(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="fake-flac",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        actual_routing = result.summary.get("actual_routing_outcome")
+        actual_staging = result.summary.get("actual_staging_area")
+        assert actual_routing not in ("rejected", "delete_eligible"), \
+            f"Fake FLAC transcode must not route to {actual_routing}"
+        assert actual_staging not in ("rejected", "delete_eligible"), \
+            f"Fake FLAC transcode must not stage to {actual_staging}"
+
+    def test_transcode_suspicion_never_rejected_or_delete(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        transcode_scenarios = [
+            "fake-flac", "mp3-transcoded-to-flac", "aac-transcoded-to-wav",
+            "opus-renamed-as-flac", "lossy-source-lossless-container",
+            "bitrate-container-incompatible",
+        ]
+        for scenario_id in transcode_scenarios:
+            result = MusicLabScenarioRunnerService().run_scenario(
+                scenario_id=scenario_id,
+                workspace_root=workspace,
+                dry_run=True,
+            )
+            actual_routing = result.summary.get("actual_routing_outcome")
+            actual_staging = result.summary.get("actual_staging_area")
+            assert actual_routing not in ("rejected", "delete_eligible"), \
+                f"{scenario_id}: transcode suspicion must not route to {actual_routing}"
+            assert actual_staging not in ("rejected", "delete_eligible"), \
+                f"{scenario_id}: transcode suspicion must not stage to {actual_staging}"
+
+    def test_good_scenarios_never_delete_eligible(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        good_scenarios = [
+            "flac-16-44-good", "flac-24-96-good", "wav-good", "alac-good",
+            "mp3-320-good", "aac-256-good", "opus-good", "ogg-vorbis-good",
+        ]
+        for scenario_id in good_scenarios:
+            result = MusicLabScenarioRunnerService().run_scenario(
+                scenario_id=scenario_id,
+                workspace_root=workspace,
+                dry_run=True,
+            )
+            actual_staging = result.summary.get("actual_staging_area")
+            assert actual_staging != "delete_eligible", \
+                f"{scenario_id}: good scenario must not be delete_eligible"
+            assert result.summary.get("destructive_action_detected") is False, \
+                f"{scenario_id}: good scenario must not have destructive actions"

@@ -659,6 +659,41 @@ def _validate_critical_rules(
         and not probe.timeout
     )
 
+    has_heuristic_only = (
+        (probe.lowpass_suspicion
+         or probe.spectral_cutoff_hz is not None
+         or probe.fake_bit_depth
+         or probe.fake_sample_rate
+         or probe.upsampled
+         or probe.downsampled
+         or probe.transcode_cutoff_source is not None
+         or probe.bitrate_container_mismatch
+         or probe.lossy_source_lossless_container)
+        and probe.decode_ok
+        and probe.has_audio_stream
+        and probe.probe_success
+        and not probe.truncated
+        and probe.duration_seconds > 0
+        and probe.container_readable
+        and not probe.timeout
+        and not has_objective_failure(fixture)
+    )
+
+    has_objective = has_objective_failure(fixture)
+
+    if actual_staging == StagingArea.DELETE_ELIGIBLE.value:
+        errors.append(
+            "CRITICAL: Staging resulted in delete_eligible. No real delete operation exists, "
+            "and delete_eligible staging should never be produced."
+        )
+        regression_notes.append("delete-eligible-staging-produced")
+
+    if actual_routing == RoutingOutcome.DELETE_ELIGIBLE.value:
+        errors.append(
+            "CRITICAL: Routing resulted in delete_eligible. Default policy forbids this."
+        )
+        regression_notes.append("delete-eligible-routing-produced")
+
     if has_cutoff_only and probe.decode_ok:
         non_cutoff_objective_failures = [
             code for code in objective_failures
@@ -685,9 +720,50 @@ def _validate_critical_rules(
             errors.append("CRITICAL: Cutoff/lowpass alone sent to quarantine. Must not quarantine for heuristic only.")
             regression_notes.append("cutoff-lowpass-caused-quarantine")
 
+        if actual_staging == StagingArea.REJECTED.value:
+            errors.append("CRITICAL: Cutoff/lowpass alone sent to rejected staging. Must not reject for heuristic only.")
+            regression_notes.append("cutoff-lowpass-caused-staging-rejection")
+
+    if has_heuristic_only:
+        if actual_routing in (RoutingOutcome.REJECTED.value, RoutingOutcome.DELETE_ELIGIBLE.value):
+            errors.append(
+                f"CRITICAL: Heuristic-only scenario routed to {actual_routing}. "
+                "Heuristic warnings alone must not trigger rejected/delete routing."
+            )
+            regression_notes.append("heuristic-only-caused-rejection")
+
+        if actual_staging in (StagingArea.REJECTED.value, StagingArea.QUARANTINE.value, StagingArea.DELETE_ELIGIBLE.value):
+            errors.append(
+                f"CRITICAL: Heuristic-only scenario staged to {actual_staging}. "
+                "Heuristic warnings alone must not trigger rejected/quarantine/delete staging."
+            )
+            regression_notes.append("heuristic-only-caused-bad-staging")
+
+    if has_objective:
+        if actual_staging == StagingArea.DELETE_ELIGIBLE.value:
+            errors.append(
+                "CRITICAL: Objective failure scenario produced delete_eligible staging. "
+                "Even for objective failures, delete must never be automatic."
+            )
+            regression_notes.append("objective-failure-caused-delete-eligible")
+
+        if actual_routing == RoutingOutcome.DELETE_ELIGIBLE.value:
+            errors.append(
+                "CRITICAL: Objective failure scenario routed to delete_eligible. "
+                "Objective failures should route to rejected, not delete_eligible."
+            )
+            regression_notes.append("objective-failure-routed-delete-eligible")
+
     if not probe.decode_ok and has_cutoff_only:
         if actual_grade != QualityGrade.BAD.value:
             warnings.append("Expected bad grade for decode_failure + cutoff, but grade is not bad. Verify decode_failure is the cause, not cutoff.")
+
+        if actual_staging == StagingArea.DELETE_ELIGIBLE.value:
+            errors.append(
+                "CRITICAL: decode_failure + cutoff routing produced delete_eligible staging. "
+                "Corrupt/decode failures can produce rejected/quarantine but never delete."
+            )
+            regression_notes.append("decode-failure-caused-delete-eligible")
 
     if probe.spectral_cutoff_hz is not None and probe.spectral_cutoff_hz == 9400 and probe.decode_ok:
         if actual_grade == QualityGrade.BAD.value:
@@ -696,6 +772,42 @@ def _validate_critical_rules(
         if actual_routing == RoutingOutcome.REJECTED.value:
             errors.append("CRITICAL: qobuz_like_cutoff was rejected. Must not be auto-rejected.")
             regression_notes.append("qobuz-like-auto-rejected")
+        if actual_staging == StagingArea.QUARANTINE.value:
+            errors.append("CRITICAL: qobuz_like_cutoff was quarantined at staging level. Must not be auto-quarantined.")
+            regression_notes.append("qobuz-like-auto-quarantined-at-staging")
+        if actual_staging == StagingArea.REJECTED.value:
+            errors.append("CRITICAL: qobuz_like_cutoff was rejected at staging level. Must not be auto-rejected.")
+            regression_notes.append("qobuz-like-auto-rejected-at-staging")
+
+    if probe.transcode_cutoff_source is not None and probe.decode_ok:
+        if probe.has_audio_stream and not has_objective_failure(fixture):
+            if actual_routing not in (RoutingOutcome.REVIEW.value, RoutingOutcome.QUARANTINE.value, RoutingOutcome.APPROVED.value):
+                errors.append(
+                    f"CRITICAL: transcode suspicion without objective failure routed to {actual_routing}. "
+                    "Must go to review or quarantine, never rejected/delete."
+                )
+                regression_notes.append("transcode-suspicion-bad-routing")
+
+            if actual_staging in (StagingArea.REJECTED.value, StagingArea.DELETE_ELIGIBLE.value):
+                errors.append(
+                    f"CRITICAL: transcode suspicion without objective failure staged to {actual_staging}. "
+                    "Must go to review or quarantine, never rejected/delete."
+                )
+                regression_notes.append("transcode-suspicion-bad-staging")
+
+
+def has_objective_failure(fixture: SyntheticFixture) -> bool:
+    probe = fixture.probe
+    return (
+        not probe.probe_success
+        or not probe.has_audio_stream
+        or probe.file_size_bytes == 0
+        or not probe.decode_ok
+        or probe.truncated
+        or probe.duration_seconds <= 0
+        or not probe.container_readable
+        or probe.timeout
+    )
 
 
 def _derive_grade_from_findings(
