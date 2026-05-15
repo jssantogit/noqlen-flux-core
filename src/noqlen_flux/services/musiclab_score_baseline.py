@@ -16,7 +16,7 @@ from noqlen_flux.musiclab_score_baseline_packs import (
 )
 from noqlen_flux.results import Artifact, FluxResult, Status
 from noqlen_flux.scoring import CandidateScore, ScoringProfile
-from noqlen_flux.search import SearchCandidate, SearchQuery
+from noqlen_flux.search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
 from noqlen_flux.services.base import FluxService
 from noqlen_flux.services.scoring import CandidateScoringService
 
@@ -70,8 +70,6 @@ class MusicLabScoreBaselineRunnerService(FluxService):
                 available_packs=list_all_score_baseline_pack_ids(),
             )
 
-        actual_score = self._scoring_service.score_candidate(query, candidate, profile=profile)
-
         baseline_results: list[MusicLabScoreBaselineResult] = []
         passed = 0
         failed = 0
@@ -84,11 +82,16 @@ class MusicLabScoreBaselineRunnerService(FluxService):
         threshold_pressures: list[str] = []
         review_notes: list[str] = []
 
-        actual_reason_codes = [r.code for r in actual_score.reasons]
-        actual_penalty_codes = [p.code for p in actual_score.penalties]
-        actual_warning_codes = [w.code for w in actual_score.warnings]
-
         for baseline in pack.baselines:
+            baseline_query, baseline_candidate = _fixture_for_baseline(baseline, query, candidate)
+            actual_score = self._scoring_service.score_candidate(
+                baseline_query,
+                baseline_candidate,
+                profile=profile,
+            )
+            actual_reason_codes = [r.code for r in actual_score.reasons]
+            actual_penalty_codes = _penalty_identifiers(actual_score)
+            actual_warning_codes = list(actual_score.warnings)
             exp = baseline.expectation
             tol = baseline.tolerance
 
@@ -146,6 +149,9 @@ class MusicLabScoreBaselineRunnerService(FluxService):
                 score_ok
                 and risk_matched
                 and confidence_ok
+                and not missing_exp_reasons
+                and not missing_exp_penalties
+                and not missing_exp_warnings
                 and not forbidden
             )
 
@@ -203,7 +209,7 @@ class MusicLabScoreBaselineRunnerService(FluxService):
                     unexpected_warnings=unexpected_warn_codes,
                     forbidden_detected=forbidden,
                     reasons=[r.code for r in actual_score.reasons],
-                    warnings=[w.code for w in actual_score.warnings],
+                    warnings=list(actual_score.warnings),
                 )
             )
 
@@ -331,3 +337,163 @@ class MusicLabScoreBaselineRunnerService(FluxService):
         )
 
         return self.run_pack(pack_id, query, candidate)
+
+
+def _penalty_identifiers(score: CandidateScore) -> list[str]:
+    identifiers: list[str] = []
+    for penalty in score.penalties:
+        identifiers.append(penalty.code)
+        term = penalty.metadata.get("term") if penalty.metadata else None
+        if term:
+            identifiers.append(f"{penalty.code}-{str(term).replace(' ', '-')}")
+    return identifiers
+
+
+def _fixture_for_baseline(
+    baseline: MusicLabScoreBaseline,
+    default_query: SearchQuery,
+    default_candidate: SearchCandidate,
+) -> tuple[SearchQuery, SearchCandidate]:
+    bid = baseline.baseline_id
+
+    if bid == "fp-alive-not-live":
+        return _track_fixture("Test Artist", "Alive")
+    if bid == "fp-olive-not-live":
+        return _track_fixture("Test Artist", "Olive")
+    if bid == "fp-premix-not-remix":
+        return _track_fixture("Test Artist", "Premix")
+    if bid == "delivery-not-live":
+        return _track_fixture("Test Artist", "Delivery")
+
+    if bid == "fp-bad-metadata-not-bad-score":
+        query, candidate = _track_fixture("Test Artist", "Test Track")
+        return query, SearchCandidate(
+            candidate_id=bid,
+            provider="fake",
+            username="flux_test_user",
+            artist=None,
+            title="Test Track",
+            directory="unknown/Test Track",
+            files=candidate.files,
+        )
+
+    if bid.startswith("bad-divergent-artist"):
+        query, candidate = _track_fixture("Correct Artist", "Test Track")
+        return query, _replace_candidate(candidate, candidate_id=bid, artist="Wrong Artist")
+    if bid.startswith("bad-divergent-title"):
+        query, candidate = _track_fixture("Test Artist", "Correct Title")
+        return query, _replace_candidate(candidate, candidate_id=bid, title="Wrong Title")
+    if bid.startswith("bad-divergent-album"):
+        return _album_fixture("Test Artist", "Correct Album", candidate_album="Wrong Album", candidate_id=bid)
+    if bid == "bad-no-files":
+        query, candidate = _track_fixture("Test Artist", "Test Track")
+        return query, _replace_candidate(candidate, candidate_id=bid, files=[])
+    if bid == "bad-all-locked":
+        query, candidate = _track_fixture("Test Artist", "Test Track")
+        return query, _replace_candidate(
+            candidate,
+            candidate_id=bid,
+            files=[CandidateFile(filename="Test Track.flac", extension="flac", locked=True)],
+        )
+    if bid == "bad-distant-name":
+        query, candidate = _track_fixture("Correct Artist", "Correct Title")
+        return query, _replace_candidate(
+            candidate,
+            candidate_id=bid,
+            artist="Other Artist",
+            title="Other Title",
+            directory="Other Artist/Other Title",
+        )
+
+    if "locked" in bid:
+        query, candidate = _track_fixture("Test Artist", "Test Track")
+        return query, _replace_candidate(
+            candidate,
+            candidate_id=bid,
+            files=[CandidateFile(filename="Test Track.flac", extension="flac", locked=True)],
+        )
+    if "low-bitrate" in bid:
+        query, candidate = _track_fixture("Test Artist", "Test Track")
+        return query, _replace_candidate(
+            candidate,
+            candidate_id=bid,
+            files=[CandidateFile(filename="Test Track.mp3", extension="mp3", declared_bitrate=128)],
+        )
+    if "confusing-folder" in bid:
+        query, candidate = _track_fixture("Test Artist", "Test Track")
+        return query, _replace_candidate(candidate, candidate_id=bid, directory="Various/Unknown")
+    if "youtube" in bid:
+        return _track_fixture("Test Artist", "Test Track youtube")
+    if "web-rip" in bid:
+        return _track_fixture("Test Artist", "Test Track web rip")
+    if "live-bootleg" in bid:
+        return _track_fixture("Test Artist", "Test Track live")
+
+    if bid in {"good-album-complete", "album-complete-match"}:
+        return _album_fixture("Test Artist", "Test Album", candidate_id=bid)
+
+    if bid.startswith("good-exact-track-mp3") or "mp3-320" in bid:
+        return _track_fixture("Test Artist", "Test Track", ext="mp3", bitrate=320)
+    if bid.startswith("good-exact-track-aac"):
+        return _track_fixture("Test Artist", "Test Track", ext="aac", bitrate=256)
+    if bid.startswith("good-exact-track-opus"):
+        return _track_fixture("Test Artist", "Test Track", ext="opus")
+
+    return default_query, _replace_candidate(default_candidate, candidate_id=bid)
+
+
+def _track_fixture(
+    artist: str,
+    title: str,
+    *,
+    ext: str = "flac",
+    bitrate: int | None = None,
+) -> tuple[SearchQuery, SearchCandidate]:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=artist, title=title)
+    candidate = SearchCandidate(
+        candidate_id=f"baseline-{title.casefold().replace(' ', '-')}",
+        provider="fake",
+        username="flux_test_user",
+        artist=artist,
+        title=title,
+        directory=f"{artist}/{title}",
+        files=[CandidateFile(
+            filename=f"{title}.{ext}",
+            extension=ext,
+            declared_bitrate=bitrate,
+            size_bytes=25000000,
+        )],
+    )
+    return query, candidate
+
+
+def _album_fixture(
+    artist: str,
+    album: str,
+    *,
+    candidate_album: str | None = None,
+    candidate_id: str = "baseline-album",
+) -> tuple[SearchQuery, SearchCandidate]:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=artist, album=album)
+    actual_album = candidate_album or album
+    candidate = SearchCandidate(
+        candidate_id=candidate_id,
+        provider="fake",
+        username="flux_test_user",
+        artist=artist,
+        album=actual_album,
+        directory=f"{artist}/{actual_album}",
+        files=[CandidateFile(filename=f"{idx:02d} Track {idx}.flac", extension="flac") for idx in range(1, 11)],
+    )
+    return query, candidate
+
+
+def _replace_candidate(candidate: SearchCandidate, **updates: Any) -> SearchCandidate:
+    data = candidate.to_dict()
+    data.update(updates)
+    files = data.pop("files", candidate.files)
+    normalized_files = [
+        item if isinstance(item, CandidateFile) else CandidateFile(**item)
+        for item in files
+    ]
+    return SearchCandidate(files=normalized_files, **data)

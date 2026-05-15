@@ -214,3 +214,17 @@ def test_quality_inspect_blocks_unsafe_path(quality_service: QualityService, wor
     )
     assert result.status == Status.FAILED
     assert result.errors
+
+
+def test_quality_inspect_cli_accepts_spectral_dry_run(tmp_path: Path) -> None:
+    from noqlen_flux.cli import main
+
+    exit_code = main([
+        "quality", "inspect",
+        "--workspace", str(tmp_path / "quality-workspace"),
+        "--path", "incoming/demo.wav",
+        "--spectral",
+        "--dry-run",
+    ])
+
+    assert exit_code == 0

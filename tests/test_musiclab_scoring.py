@@ -507,3 +507,37 @@ def test_musiclab_scoring_run_cli_command() -> None:
     exit_code = main(["musiclab", "scoring", "run"])
 
     assert exit_code in (0, 1)
+
+
+def test_musiclab_score_baseline_cli_list() -> None:
+    from noqlen_flux.cli import main
+
+    exit_code = main(["musiclab", "scoring", "baseline", "list"])
+
+    assert exit_code == 0
+
+
+def test_musiclab_score_baseline_cli_run_all(tmp_path: Path) -> None:
+    from noqlen_flux.cli import main
+
+    exit_code = main([
+        "musiclab", "scoring", "baseline", "run",
+        "--all",
+        "--workspace", str(tmp_path / "score-workspace"),
+        "--dry-run",
+    ])
+
+    assert exit_code in (0, 1)
+
+
+def test_musiclab_score_baseline_false_positive_pack_passes(tmp_path: Path) -> None:
+    from noqlen_flux.cli import main
+
+    exit_code = main([
+        "musiclab", "scoring", "baseline", "run",
+        "--pack", "scoring-false-positive-guards",
+        "--workspace", str(tmp_path / "score-workspace"),
+        "--dry-run",
+    ])
+
+    assert exit_code == 0

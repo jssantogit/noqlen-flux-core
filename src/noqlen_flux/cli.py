@@ -152,7 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
     musiclab_scoring_baseline_list.set_defaults(func=run_musiclab_scoring_baseline_list)
 
     musiclab_scoring_baseline_run = musiclab_scoring_baseline_subparsers.add_parser("run", help="Run a score baseline pack")
-    musiclab_scoring_baseline_run.add_argument("--pack", required=True, help="Pack ID to run")
+    musiclab_scoring_baseline_run.add_argument("--pack", help="Pack ID to run")
+    musiclab_scoring_baseline_run.add_argument("--all", action="store_true", help="Run all score baseline packs")
     musiclab_scoring_baseline_run.add_argument("--workspace", required=True, help="Workspace root path")
     musiclab_scoring_baseline_run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
     musiclab_scoring_baseline_run.set_defaults(func=run_musiclab_scoring_baseline_run)
@@ -387,6 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     quality_inspect.add_argument("--workspace", required=True, help="Workspace root path")
     quality_inspect.add_argument("--path", required=True, help="Relative path to file within workspace")
     quality_inspect.add_argument("--item-id", help="Optional item id")
+    quality_inspect.add_argument("--spectral", action="store_true", help="Include controlled spectral-analysis planning")
     quality_inspect_mode = quality_inspect.add_mutually_exclusive_group()
     quality_inspect_mode.add_argument("--dry-run", action="store_true", help="Plan inspection without executing (default)")
     quality_inspect_mode.add_argument("--apply", action="store_true", help="Execute quality inspection and write report to workspace/reports")
@@ -614,6 +616,22 @@ def run_musiclab_scoring_baseline_list(_args: argparse.Namespace) -> int:
 
 def run_musiclab_scoring_baseline_run(args: argparse.Namespace) -> int:
     from noqlen_flux.services import MusicLabScoreBaselineRunnerService
+
+    if getattr(args, "all", False):
+        return run_musiclab_scoring_baseline_run_all(args)
+    if not getattr(args, "pack", None):
+        from noqlen_flux.results import FluxError, FluxResult, Status
+        result = FluxResult(
+            operation="musiclab-score-baseline",
+            status=Status.FAILED,
+            errors=[FluxError(
+                code="missing-baseline-selection",
+                message="Use --pack PACK or --all.",
+            )],
+            summary={"error": "Use --pack PACK or --all."},
+        ).finish()
+        print(_render_result(result))
+        return 1
 
     result = MusicLabScoreBaselineRunnerService().run_with_fixture(
         pack_id=args.pack,
@@ -1461,7 +1479,7 @@ def run_quality_inspect(args: argparse.Namespace) -> int:
     else:
         backend = FfmpegProbeBackend()
         if not backend.is_available():
-            from noqlen_flux.results import FluxResult, Status, FluxError
+            from noqlen_flux.results import FluxError, FluxResult
             print(_render_result(FluxResult(
                 operation="quality",
                 status=Status.FAILED,
@@ -1479,6 +1497,40 @@ def run_quality_inspect(args: argparse.Namespace) -> int:
         backend=backend,
         dry_run=dry_run,
     )
+
+    if getattr(args, "spectral", False) and result.status != Status.FAILED:
+        from noqlen_flux.services.spectral import FakeSpectralBackend, SpectralAnalysisService
+        from noqlen_flux.spectral import SpectralAnalysisRequest
+
+        try:
+            spectral_request = SpectralAnalysisRequest(
+                request_id=f"quality-spectral-{item_id}",
+                item_id=item_id,
+                relative_path=args.path,
+                workspace_root=workspace,
+            )
+            spectral_result = SpectralAnalysisService().analyze(
+                spectral_request,
+                FakeSpectralBackend(),
+                dry_run=dry_run,
+            )
+            result.steps.extend(spectral_result.steps)
+            result.warnings.extend(spectral_result.warnings)
+            result.errors.extend(spectral_result.errors)
+            result.artifacts.extend(spectral_result.artifacts)
+            result.planned_changes.extend(spectral_result.planned_changes)
+            result.applied_changes.extend(spectral_result.applied_changes)
+            result.summary["spectral"] = spectral_result.summary
+            if spectral_result.status == Status.FAILED:
+                result.status = Status.FAILED
+        except ValueError as exc:
+            from noqlen_flux.results import FluxError
+            result.status = Status.FAILED
+            result.errors.append(FluxError(
+                code="unsafe-spectral-quality-path",
+                message=str(exc),
+            ))
+            result.summary["spectral_error"] = str(exc)
 
     if not dry_run and result.status != Status.FAILED:
         report_result = ReportService().write_report(
