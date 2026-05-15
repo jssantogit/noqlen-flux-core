@@ -4,6 +4,7 @@ from .artifact_registration import ArtifactRegistrationService
 from .audio_probe import AudioProbeService
 from .base import FluxService
 from .cleanup import CleanupPlanningService
+from .cleanup_execution import CleanupExecutionService, build_execution_request_from_plan
 from .doctor import DoctorService
 from .download_workspace import DownloadWorkspaceService
 from .downloads import DownloadPlanningService
@@ -31,6 +32,7 @@ __all__ = [
     "ArtifactRegistrationService",
     "AudioProbeService",
     "CandidateScoringService",
+    "CleanupExecutionService",
     "CleanupPlanningService",
     "DoctorService",
     "DownloadPlanningService",

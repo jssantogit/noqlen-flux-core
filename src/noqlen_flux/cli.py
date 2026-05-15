@@ -15,7 +15,8 @@ from .reports import ReportFormat
 from .results import FluxError, FluxResult, Status
 from .scoring import CandidateScore
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import ArtifactRegistrationService, CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
+from .services import ArtifactRegistrationService, CandidateScoringService, CleanupExecutionService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
+from .services.cleanup_execution import build_execution_request_from_plan
 from .transfers import TransferExecutionMode, TransferPriority
 
 
@@ -455,7 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     handoff_apply_mode.add_argument("--apply", action="store_true", help="Execute handoff apply bridge")
     handoff_apply.set_defaults(func=run_handoff_apply)
 
-    cleanup = subparsers.add_parser("cleanup", help="Plan safe cleanup operations (planned-only, no execution)")
+    cleanup = subparsers.add_parser("cleanup", help="Plan and execute safe cleanup operations")
     cleanup_subparsers = cleanup.add_subparsers(dest="cleanup_command")
 
     cleanup_plan = cleanup_subparsers.add_parser("plan", help="Plan cleanup without executing it")
@@ -469,6 +470,21 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_plan_fake_mode.add_argument("--dry-run", action="store_true", help="Plan cleanup without executing it (default)")
     cleanup_plan_fake_mode.add_argument("--apply", action="store_true", help="Apply mode is not supported for cleanup planning")
     cleanup_plan_fake.set_defaults(func=run_cleanup_plan_fake)
+
+    cleanup_execute = cleanup_subparsers.add_parser("execute", help="Execute cleanup plan on workspace (conservative, workspace-only)")
+    cleanup_execute.add_argument("--workspace", required=True, help="Workspace root path")
+    cleanup_execute_mode = cleanup_execute.add_mutually_exclusive_group(required=True)
+    cleanup_execute_mode.add_argument("--dry-run", action="store_true", help="Preview cleanup execution without modifying files")
+    cleanup_execute_mode.add_argument("--apply", action="store_true", help="Execute allowed cleanup operations within workspace")
+    cleanup_execute.set_defaults(func=run_cleanup_execute)
+
+    cleanup_autorun = cleanup_subparsers.add_parser("auto-run", help="Run auto-cleanup (opt-in, policy-driven, workspace-only)")
+    cleanup_autorun.add_argument("--workspace", required=True, help="Workspace root path")
+    cleanup_autorun_mode = cleanup_autorun.add_mutually_exclusive_group(required=True)
+    cleanup_autorun_mode.add_argument("--dry-run", action="store_true", help="Preview auto-cleanup without modifying files")
+    cleanup_autorun_mode.add_argument("--apply", action="store_true", help="Execute auto-cleanup (requires explicit policy)")
+    cleanup_autorun.add_argument("--policy", choices=["conservative", "aggressive"], default="conservative", help="Auto-cleanup policy preset (default: conservative)")
+    cleanup_autorun.set_defaults(func=run_cleanup_autorun)
 
     return parser
 
@@ -1902,6 +1918,156 @@ def run_cleanup_plan_fake(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_cleanup_execute(args: argparse.Namespace) -> int:
+    from noqlen_flux.cleanup import build_fake_cleanup_candidates, CleanupExecutionPolicy
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.services import CleanupExecutionService, CleanupPlanningService
+
+    dry_run = not getattr(args, "apply", False)
+
+    candidates = build_fake_cleanup_candidates()
+    planning_result = CleanupPlanningService().plan_cleanup(candidates)
+
+    plan_id = planning_result.summary.get("plan_id", "")
+    plan_data = planning_result.summary.get("cleanup_plan", {})
+    decisions_raw = plan_data.get("decisions", [])
+
+    from noqlen_flux.cleanup import CleanupDecision
+    decisions: list[CleanupDecision] = []
+    for d in decisions_raw:
+        if isinstance(d, dict):
+            decisions.append(CleanupDecision(
+                candidate_id=d.get("candidate_id", ""),
+                action_type=d.get("action_type", "none"),
+                risk=d.get("risk", "low"),
+                reasons=d.get("reasons", []),
+                warnings=d.get("warnings", []),
+                errors=d.get("errors", []),
+                metadata=d.get("metadata", {}),
+            ))
+
+    execution_policy = CleanupExecutionPolicy(
+        name="cli-execution-v1",
+        version="1",
+        description="CLI cleanup execution policy.",
+    )
+
+    config = config_from_env(args.workspace, dry_run=dry_run)
+
+    request = build_execution_request_from_plan(
+        cleanup_plan_id=plan_id,
+        workspace_root=args.workspace,
+        decisions=decisions,
+        candidates=candidates,
+        policy=execution_policy,
+    )
+
+    result = CleanupExecutionService().execute_cleanup(request, config, dry_run=dry_run, policy=execution_policy)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_cleanup_autorun(args: argparse.Namespace) -> int:
+    from noqlen_flux.cleanup import (
+        AutoCleanupPolicy,
+        AutoCleanupPolicyPreset,
+        build_fake_cleanup_candidates,
+        CleanupExecutionPolicy,
+    )
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.services import CleanupExecutionService, CleanupPlanningService
+
+    dry_run = not getattr(args, "apply", False)
+    preset = getattr(args, "policy", "conservative")
+
+    if preset == "conservative":
+        auto_policy = AutoCleanupPolicy.conservative_default()
+    else:
+        from noqlen_flux.cleanup import CleanupExecutionAction
+        auto_policy = AutoCleanupPolicy(
+            name="auto-cleanup-aggressive-v1",
+            version="1",
+            description="Aggressive auto-cleanup policy. Includes move-to-trash for expired rejected items.",
+            enabled=True,
+            preset=AutoCleanupPolicyPreset.AGGRESSIVE,
+            trigger_on_handoff=True,
+            trigger_on_staging_complete=True,
+            allowed_action_types=[
+                CleanupExecutionAction.REMOVE_TEMP_REPORT,
+                CleanupExecutionAction.REMOVE_STAGING_TEMP,
+                CleanupExecutionAction.CLEAN_INVALID_MANIFEST,
+                CleanupExecutionAction.CLEAN_INCOMPLETE_ARTIFACT,
+                CleanupExecutionAction.MOVE_TO_TRASH,
+            ],
+        )
+
+    if not auto_policy.enabled and dry_run:
+        result = CleanupExecutionService().result(
+            Status.FAILED,
+            error="Auto-cleanup is not enabled (opt-in required). Set enabled=True in policy or use --policy aggressive.",
+        )
+        print(_render_result(result))
+        return 1
+
+    candidates = build_fake_cleanup_candidates()
+    planning_result = CleanupPlanningService().plan_cleanup(candidates)
+
+    plan_id = planning_result.summary.get("plan_id", "")
+    plan_data = planning_result.summary.get("cleanup_plan", {})
+    decisions_raw = plan_data.get("decisions", [])
+
+    from noqlen_flux.cleanup import CleanupDecision
+    decisions: list[CleanupDecision] = []
+    for d in decisions_raw:
+        if isinstance(d, dict):
+            decisions.append(CleanupDecision(
+                candidate_id=d.get("candidate_id", ""),
+                action_type=d.get("action_type", "none"),
+                risk=d.get("risk", "low"),
+                reasons=d.get("reasons", []),
+                warnings=d.get("warnings", []),
+                errors=d.get("errors", []),
+                metadata=d.get("metadata", {}),
+            ))
+
+    execution_policy = CleanupExecutionPolicy(
+        name="auto-cleanup-execution-v1",
+        version="1",
+        description=f"Auto-cleanup execution policy ({preset}).",
+    )
+
+    config = config_from_env(args.workspace, dry_run=dry_run)
+
+    request = build_execution_request_from_plan(
+        cleanup_plan_id=plan_id,
+        workspace_root=args.workspace,
+        decisions=decisions,
+        candidates=candidates,
+        policy=execution_policy,
+    )
+
+    result = CleanupExecutionService().execute_cleanup(request, config, dry_run=dry_run, policy=execution_policy)
+
+    if auto_policy.require_report:
+        from noqlen_flux.results import Artifact
+        result.artifacts.append(
+            Artifact(
+                kind="auto-cleanup-report",
+                description=f"Auto-cleanup report (preset={preset}, mode={'dry-run' if dry_run else 'apply'})",
+                metadata={
+                    "auto_policy": auto_policy.name,
+                    "preset": preset,
+                    "enabled": auto_policy.enabled,
+                    "workspace_only": auto_policy.workspace_only,
+                    "block_approved": auto_policy.block_approved,
+                },
+            )
+        )
+
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def _resolve_provider(kind: str, args: argparse.Namespace | None = None):
     if kind == "fake":
         return FakeSearchProvider(
@@ -2141,6 +2307,28 @@ def _render_result(result: FluxResult) -> str:
         total_bytes = result.summary.get("total_planned_bytes")
         if total_bytes is not None:
             lines.append(f"planned-bytes: {total_bytes}")
+    if result.operation == "cleanup-execution":
+        mode = result.summary.get("mode")
+        if mode is not None:
+            lines.append(f"mode: {mode}")
+        total_candidates = result.summary.get("total_candidates")
+        if total_candidates is not None:
+            lines.append(f"candidates: {total_candidates}")
+        executed = result.summary.get("executed")
+        if executed is not None:
+            lines.append(f"executed: {executed}")
+        blocked = result.summary.get("blocked")
+        if blocked is not None:
+            lines.append(f"blocked: {blocked}")
+        skipped = result.summary.get("skipped")
+        if skipped is not None:
+            lines.append(f"skipped: {skipped}")
+        failed = result.summary.get("failed")
+        if failed is not None:
+            lines.append(f"failed: {failed}")
+        destructive = result.summary.get("destructive_action_detected")
+        if destructive is not None:
+            lines.append(f"destructive_action_detected: {destructive}")
     if result.operation == "search" and result.summary.get("provider") == "slskd":
         response_count = result.summary.get("response_count")
         if response_count is not None:
