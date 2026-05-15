@@ -2001,10 +2001,17 @@ def run_cleanup_autorun(args: argparse.Namespace) -> int:
             ],
         )
 
-    if not auto_policy.enabled and dry_run:
+    if not auto_policy.enabled:
         result = CleanupExecutionService().result(
             Status.FAILED,
             error="Auto-cleanup is not enabled (opt-in required). Set enabled=True in policy or use --policy aggressive.",
+        )
+        result.errors.append(
+            CleanupExecutionService().error(
+                "auto-cleanup-disabled",
+                "Auto-cleanup is not enabled. This is an opt-in feature. Use --policy aggressive to enable.",
+                error="Auto-cleanup disabled by default.",
+            )
         )
         print(_render_result(result))
         return 1

@@ -617,7 +617,7 @@ class MusicLabScenarioRunnerService(FluxService):
                         )
                     )
 
-                    if candidate_kind in (CleanupCandidateKind.REJECTED, CleanupCandidateKind.DELETE_ELIGIBLE):
+                    if candidate_kind in (CleanupCandidateKind.DELETE_ELIGIBLE,):
                         destructive_action_detected = True
                         warnings.append(f"Cleanup candidate kind '{candidate_kind.value}' flagged - verify no destructive action")
                 else:
