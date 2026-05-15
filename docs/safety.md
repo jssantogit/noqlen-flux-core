@@ -267,24 +267,23 @@ No test uses real network access or a real music library. All tests use fake pro
 
 ## Quality Analysis
 
-Quality analysis is currently contracts-only. `QualityService` does not perform real audio analysis, use ffmpeg, perform transcode detection, measure loudness, detect clipping, or run low-pass analysis. It accepts structured fake data and returns simulated `QualityResult` objects.
+Quality analysis now supports an initial real audio probing layer via opt-in fake or ffprobe backends.
 
-Future real audio analysis must operate inside an isolated workspace. It must not touch a real music library, personal music folders, or download folders. All file operations must be confined to the Flux workspace root with path containment and symlink protection.
+`AudioProbeService` and `FakeProbeBackend`/`FfmpegProbeBackend` provide:
+- Fake backend (default for dry-run and tests): simulates audio properties without real files.
+- ffprobe backend (opt-in): calls `ffprobe` via `subprocess.run()` with timeout. ffprobe must be installed separately.
+- All probes are confined to the workspace root. Path traversal, symlink escape, and protected roots are blocked.
+- Dry-run is the default. Apply mode requires explicit `--apply`.
 
-`QualityGrade` is a post-download quality classification (`excellent`, `medium`, `bad`, `unknown`). It is NOT `CandidateRisk`. `CandidateRisk` is a pre-download risk signal. The two must remain separate: scoring does not import quality, and quality does not import scoring.
+`QualityService.probe_to_quality_result()` bridges probe findings to quality findings:
+- `objective_failure` → `QualityFindingKind.OBJECTIVE_FAILURE`
+- `heuristic_warning` → `QualityFindingKind.HEURISTIC_WARNING`
+- Probe findings are never reclassified across the boundary.
+- The bridge does not execute routing, staging, cleanup, or handoff.
 
-Heuristic warnings such as low-pass suspicion, clipping suspicion, or transcode suspicion must remain informational until MusicLab calibration establishes strong thresholds. They must not cause file deletion, movement, quarantine, or rejection by themselves.
+`QualityService.inspect_file()` validates path safety, runs the probe, and bridges to `QualityResult`. Dry-run is the default.
 
-Objective failures can inform future routing decisions but do not execute delete, quarantine, or rejection in this commit. `QualityResult` does not contain `RoutingDecision`. A future routing layer will combine `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration.
-
-Automated quality tests must use fake data, temporary directories, or controlled fixtures only. They must not use real audio files, network access, ffmpeg, transcode tools, or personal filesystem paths.
-
-Quality contracts must not expose:
-
-- Complete lyrics.
-- Raw audio fingerprints.
-- Raw provider payloads.
-- Secrets, tokens, or credentials.
+Tests use mock `subprocess.run()`; no real ffprobe/ffmpeg is required. All audio probe tests use fake backends or mocked subprocess calls.
 - Unnecessary personal absolute paths.
 
 `QualityProfile` is versioned so MusicLab can calibrate thresholds before any real provider or audio analysis is active. The default profile declares `stage: post-download` and `status: contracts-only`.

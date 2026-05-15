@@ -431,6 +431,32 @@ noqlen-flux quality fake bad
 
 This is not real audio quality analysis. Flux still has no ffmpeg, transcode detection, spectrogram analysis, decode validation, clipping detection, or low-pass analysis. Real audio inspection will come in a separate future commit after MusicLab calibration establishes thresholds.
 
+## Audio Probe Infrastructure
+
+Audio probing provides the first real post-download audio validation layer. `AudioProbeService` validates audio files via backends (fake or ffprobe) within the workspace.
+
+Probe a file with fake backend (dry-run):
+
+```bash
+noqlen-flux quality inspect --workspace /tmp/workspace --path incoming/demo.wav --dry-run
+```
+
+Probe a file with real ffprobe (opt-in, requires ffmpeg installed):
+
+```bash
+noqlen-flux quality inspect --workspace /tmp/workspace --path incoming/demo.wav --apply
+```
+
+- `FakeProbeBackend` is used in dry-run and all tests. No real audio files required.
+- `FfmpegProbeBackend` calls `ffprobe` via `subprocess.run()` with configurable timeout. ffprobe is optional.
+- Dry-run is the default; `--apply` requires explicit opt-in.
+- ffprobe not installed → controlled error, not a crash.
+- Path safety: absolute paths, traversal, symlink escape, and protected roots are blocked.
+- Spectral cutoff/low-pass findings are **heuristic warnings only**, never objective failures.
+- Probe findings are mapped to `QualityResult` via `probe_to_quality_result()` without reclassification.
+- Quality does not execute routing, staging, cleanup, or handoff.
+- No real music library is touched. All operations are confined to the workspace.
+
 ## Routing Decision Foundation
 
 Post-download routing decision is a separate Flux domain from both pre-download scoring and post-download quality analysis. `RoutingDecision` (`approved`, `quarantine`, `rejected`, `delete_eligible`, `review`, `unknown`) represents a planned routing action based on quality signals and policy configuration. It does not move, delete, or quarantine any files.

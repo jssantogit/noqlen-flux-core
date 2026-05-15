@@ -166,6 +166,32 @@ Safety checks include:
 
 Workspace safety does not perform quality analysis, staging, cleanup, or handoff. It only validates that download targets are safe and contained within the Flux workspace.
 
+## Audio Probe Infrastructure
+
+Post-download audio probing provides the first real audio validation layer. Probing is opt-in and separated from quality grading, routing, staging, and handoff.
+
+Flux owns these audio probe models:
+- `AudioProbeRequest` — probe request with relative_path, workspace_root, backend selection, timeout.
+- `AudioProbeResult` — probe result with decode_ok, has_audio_stream, duration, sample_rate, codec, bitrate, channels, findings.
+- `AudioProbeFinding` — individual probe observation with code, message, category (diagnostic, heuristic_warning, objective_failure), and confidence.
+- `AudioProbePolicy` — configurable thresholds for probe validation (min/max duration, sample rate, bit depth, channels).
+- `ProbeBackendKind` — backend classification: fake, ffprobe, unknown.
+
+`ProbeBackend` is an abstract interface with two implementations:
+- `FakeProbeBackend`: configurable grades (excellent/medium/bad/unknown). Simulates audio properties without real files. Used in all tests. Supports `extra_findings` for spectral cutoff/low-pass scenarios.
+- `FfmpegProbeBackend`: calls `ffprobe` via `subprocess.run()`. Parses JSON output for real audio stream metadata. Timeout-controlled (default 30s). Handles decode failure, no audio stream, invalid duration, corrupt file, ffprobe not installed.
+
+`AudioProbeService.probe()` validates path safety (workspace containment, traversal blocking, protected roots) before any backend execution. Dry-run is the default; apply mode requires explicit opt-in.
+
+### Spectral Cutoff / Low-Pass Protection
+
+Spectral cutoff and low-pass detection are **heuristic signals only**:
+- Isolated spectral cutoff/low-pass → `heuristic_warning`, never `objective_failure`.
+- Isolated spectral cutoff/low-pass → never `QualityGrade.BAD` by itself.
+- `lowpass + decode_ok + metadata_ok` → `medium/review/unknown`, never `bad` objective.
+- `lowpass + decode_failure` → may become `bad`, but due to `decode_failure` objective failure, not the lowpass.
+- Spectral cutoff is weak evidence and must be correlated with other signals (decode, duration, bitrate) before influencing quality decisions.
+
 ## Quality Analysis Foundation
 
 Post-download quality analysis is a separate core domain from pre-download scoring and download/transfer planning. This commit introduces the contracts and fake simulation layer for future audio file inspection.
@@ -181,6 +207,13 @@ Flux owns these quality models:
 - `QualitySummary` — aggregate counts across multiple results: total_items, excellent_count, medium_count, bad_count, unknown_count, warning_count, error_count.
 
 `QualityService` provides service-level fake quality evaluation and summarization. It accepts structured fake data and returns `FluxResult` with steps, warnings, errors, and logical quality artifacts. It does not access the network, download files, create files, read audio, use ffmpeg, perform transcode analysis, or know about `slskd`.
+
+`QualityService.probe_to_quality_result()` bridges `AudioProbeResult` into `QualityResult`, converting probe findings into quality findings with proper kind/separation mapping:
+- `objective_failure` → `QualityFindingKind.OBJECTIVE_FAILURE`
+- `heuristic_warning` → `QualityFindingKind.HEURISTIC_WARNING`
+- Findings are never reclassified across the boundary.
+
+`QualityService.inspect_file()` provides the full inspection workflow: validate path safety → run probe (fake or ffprobe) → bridge to quality result. Dry-run is the default.
 
 Quality analysis does not perform routing, quarantine, rejection, or deletion. `QualityResult` does not contain `RoutingDecision`. A future routing layer will combine `CandidateRisk`, `QualityGrade`, workspace policy, and user calibration to produce decisions: `approved` / `quarantine` / `rejected` / `delete_eligible`.
 
