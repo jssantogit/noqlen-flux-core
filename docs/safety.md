@@ -139,6 +139,19 @@ The `search slskd` CLI commands provide a preview of search results without down
 - The CLI is the only layer that instantiates `SlskdProvider`; core services remain provider-agnostic.
 - Output must not contain raw provider payloads, API keys, tokens, headers, or personal absolute paths.
 
+### Slskd Download Planning CLI
+
+The `download plan slskd` CLI commands transform slskd search results into download plans without executing any transfer.
+
+- slskd download planning CLI is offline/no-network by default.
+- Real network search requires explicit `--allow-network`.
+- Download planning never downloads files.
+- Download planning never writes files.
+- API key should come from environment variable via `--api-key-env`, never as a literal argument.
+- Tests must use offline/fake clients; no real network access in automated tests.
+- `DownloadPlanningService` does not know about slskd; it operates on Flux `SearchCandidate` and `DownloadRequest` models only.
+- Output must not contain raw provider payloads, API keys, tokens, headers, or personal absolute paths.
+
 ## Search Providers
 
 Automated search tests must use fake providers or controlled fixtures. Real network access, real `slskd`, native Soulseek sessions, credentials, live provider APIs, and real downloads are prohibited in automated search tests.

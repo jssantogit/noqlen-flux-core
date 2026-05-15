@@ -36,6 +36,10 @@ Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `Downlo
 - A future `NativeSoulseekProvider` can implement the same `SlskdClientProtocol` and replace `FakeSlskdClient` or `SlskdHttpClient` without rewriting the core.
 - Real network access is opt-in via `allow_network`. Search is implemented; download, queue, and transfer are not.
 - UI/search surfaces should consume `SearchCandidate` and `SearchProviderResult`, not slskd payloads.
+- The CLI can instantiate `SlskdProvider` directly for search and download planning preview. Core services must NOT import `providers.slskd`.
+- slskd search-to-download planning uses Flux models only. `SearchService` and `DownloadPlanningService` remain provider-agnostic.
+- `DownloadPlan` is a preview, not execution. It never downloads, writes files, or accesses the network.
+- UI/search surfaces can use `SearchCandidate` + `DownloadPlan` for candidate selection.
 
 ## Provider Boundary
 
@@ -356,6 +360,8 @@ Search CLI commands are adapters over `SearchService`: `search fake track` and `
 The CLI can also instantiate `SlskdProvider` directly for search preview: `search slskd track --artist "Artist" --title "Track" --offline` and `search slskd album --artist "Artist" --album "Album" --offline`. These commands are offline by default; `--allow-network` is required for real search. When `--score` is used, `CandidateScoringService` scores the returned candidates. The CLI renders candidate details including username, directory, file count, locked files, filenames, extensions, sizes, declared bitrate, and duration. Core services still depend on the generic `SearchProvider` contract only. Search preview returns Flux `SearchCandidate` and `SearchProviderResult` models, not slskd payloads. UI/search surfaces should consume these Flux models. The slskd provider remains replaceable by a future `NativeSoulseekProvider`.
 
 Download planning CLI commands are adapters over `DownloadPlanningService`: `download plan fake track` and `download plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest` with constraints, call `DownloadPlanningService`, and render the returned `FluxResult`. The CLI does not implement planning logic, download execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
+
+The CLI also supports slskd search-to-download planning: `download plan slskd track` and `download plan slskd album`. These commands build `SearchQuery` objects, instantiate `SlskdProvider` directly (as CLI adapter), call `SearchService`, optionally score candidates, select a candidate by `--candidate-index` or default to the first, build a `DownloadRequest` with constraints, and call `DownloadPlanningService`. Network access is disabled by default; `--allow-network` is required for real search. The CLI renders both the search result and the download plan result. Core services remain provider-agnostic; `SearchService` and `DownloadPlanningService` depend only on generic `SearchProvider` and Flux models. A future `NativeSoulseekProvider` can implement the same flow without core changes. UI/search surfaces can use `SearchCandidate` + `DownloadPlan` for candidate selection. DownloadPlan is a preview, not execution.
 
 Transfer planning CLI commands are adapters over `TransferPlanningService`: `transfer plan fake track` and `transfer plan fake album` build `SearchQuery` objects, use the fake provider, optionally score the candidate, build a `DownloadRequest`, call `DownloadPlanningService` to get a `DownloadPlan`, then call `TransferPlanningService` to get a `QueuePlan`, and render the returned `FluxResult`. The CLI does not implement planning logic, transfer execution, or provider-specific behavior. All planning commands are dry-run by nature and have no `--apply` mode.
 

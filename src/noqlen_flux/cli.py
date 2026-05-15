@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from typing import Any
 
 from . import __version__
 from .config import config_from_env
@@ -10,7 +11,8 @@ from .providers.fake import FakeSearchProvider
 from .providers.fake_transfer import FakeTransferProvider
 from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
-from .results import FluxResult, Status
+from .results import FluxError, FluxResult, Status
+from .scoring import CandidateScore
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
 from .services import CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
 from .transfers import TransferPriority
@@ -175,6 +177,45 @@ def build_parser() -> argparse.ArgumentParser:
     download_plan_fake_album.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
     download_plan_fake_album.add_argument("--allow-locked", action="store_true", help="Allow locked files")
     download_plan_fake_album.set_defaults(func=run_download_plan_fake_album)
+
+    download_plan_slskd = download_plan_subparsers.add_parser("slskd", help="Plan a download from slskd search results (offline by default)")
+    download_plan_slskd_subparsers = download_plan_slskd.add_subparsers(dest="download_plan_kind")
+
+    download_plan_slskd_track = download_plan_slskd_subparsers.add_parser("track", help="Plan a slskd track download")
+    download_plan_slskd_track.add_argument("--artist", required=True, help="Artist name")
+    download_plan_slskd_track.add_argument("--title", required=True, help="Track title")
+    download_plan_slskd_track.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    download_plan_slskd_track.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    download_plan_slskd_track.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    download_plan_slskd_track.add_argument("--allow-network", action="store_true", help="Allow network access for real search")
+    download_plan_slskd_track.add_argument("--timeout", type=int, help="HTTP timeout in seconds (default 5)")
+    download_plan_slskd_track.add_argument("--max-polls", type=int, help="Maximum poll attempts (default 10)")
+    download_plan_slskd_track.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    download_plan_slskd_track.add_argument("--candidate-index", type=int, default=0, help="Select candidate by index (default 0)")
+    download_plan_slskd_track.add_argument("--score-min", type=float, help="Minimum score required to plan")
+    download_plan_slskd_track.add_argument("--max-files", type=int, help="Maximum files allowed")
+    download_plan_slskd_track.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
+    download_plan_slskd_track.add_argument("--allow-locked", action="store_true", help="Allow locked files")
+    download_plan_slskd_track.add_argument("--allowed-extension", action="append", help="Allowed file extension (repeatable)")
+    download_plan_slskd_track.set_defaults(func=run_download_plan_slskd_track)
+
+    download_plan_slskd_album = download_plan_slskd_subparsers.add_parser("album", help="Plan a slskd album download")
+    download_plan_slskd_album.add_argument("--artist", required=True, help="Artist name")
+    download_plan_slskd_album.add_argument("--album", required=True, help="Album title")
+    download_plan_slskd_album.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    download_plan_slskd_album.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    download_plan_slskd_album.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    download_plan_slskd_album.add_argument("--allow-network", action="store_true", help="Allow network access for real search")
+    download_plan_slskd_album.add_argument("--timeout", type=int, help="HTTP timeout in seconds (default 5)")
+    download_plan_slskd_album.add_argument("--max-polls", type=int, help="Maximum poll attempts (default 10)")
+    download_plan_slskd_album.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    download_plan_slskd_album.add_argument("--candidate-index", type=int, default=0, help="Select candidate by index (default 0)")
+    download_plan_slskd_album.add_argument("--score-min", type=float, help="Minimum score required to plan")
+    download_plan_slskd_album.add_argument("--max-files", type=int, help="Maximum files allowed")
+    download_plan_slskd_album.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
+    download_plan_slskd_album.add_argument("--allow-locked", action="store_true", help="Allow locked files")
+    download_plan_slskd_album.add_argument("--allowed-extension", action="append", help="Allowed file extension (repeatable)")
+    download_plan_slskd_album.set_defaults(func=run_download_plan_slskd_album)
 
     transfer = subparsers.add_parser("transfer", help="Plan safe transfer/queue operations")
     transfer_subparsers = transfer.add_subparsers(dest="transfer_command")
@@ -494,6 +535,168 @@ def run_download_plan_fake_album(args: argparse.Namespace) -> int:
     result = DownloadPlanningService().plan_download(request)
     print(_render_result(result))
     return _exit_code(result.status)
+
+
+def run_download_plan_slskd_track(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+    provider = _resolve_slskd_provider(args)
+    search_result = SearchService().search(query, provider, _scoring_service(args))
+    if search_result.status == Status.FAILED:
+        print(_render_result(search_result))
+        return 1
+    candidates = search_result.summary.get("candidates", [])
+    if not candidates:
+        print(_render_result(search_result))
+        print(_render_result(FluxResult(
+            operation="download-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="no-candidates", message="no candidates found from slskd search")],
+        )))
+        return 1
+    candidate_index = getattr(args, "candidate_index", 0) or 0
+    if candidate_index < 0 or candidate_index >= len(candidates):
+        print(_render_result(FluxResult(
+            operation="download-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="candidate-index-out-of-range", message=f"candidate index {candidate_index} out of range (0-{len(candidates) - 1})")],
+        )))
+        return 1
+    candidate_data = candidates[candidate_index]
+    candidate = _candidate_from_dict(candidate_data)
+    score = None
+    if args.score:
+        scores = search_result.summary.get("scores", [])
+        if candidate_index < len(scores):
+            score = _score_from_dict(scores[candidate_index])
+    allowed_ext = getattr(args, "allowed_extension", None) or None
+    allowed_extensions = set(allowed_ext) if allowed_ext else None
+    constraints = DownloadConstraint(
+        allow_locked=getattr(args, "allow_locked", False),
+        require_score_min=getattr(args, "score_min", None),
+        max_files=getattr(args, "max_files", None),
+        max_total_bytes=getattr(args, "max_total_bytes", None),
+        allowed_extensions=allowed_extensions,
+    )
+    request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{args.artist} - {args.title}",
+        score=score,
+        constraints=constraints,
+    )
+    result = DownloadPlanningService().plan_download(request)
+    print(_render_result(search_result))
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_download_plan_slskd_album(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album)
+    provider = _resolve_slskd_provider(args)
+    search_result = SearchService().search(query, provider, _scoring_service(args))
+    if search_result.status == Status.FAILED:
+        print(_render_result(search_result))
+        return 1
+    candidates = search_result.summary.get("candidates", [])
+    if not candidates:
+        print(_render_result(search_result))
+        print(_render_result(FluxResult(
+            operation="download-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="no-candidates", message="no candidates found from slskd search")],
+        )))
+        return 1
+    candidate_index = getattr(args, "candidate_index", 0) or 0
+    if candidate_index < 0 or candidate_index >= len(candidates):
+        print(_render_result(FluxResult(
+            operation="download-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="candidate-index-out-of-range", message=f"candidate index {candidate_index} out of range (0-{len(candidates) - 1})")],
+        )))
+        return 1
+    candidate_data = candidates[candidate_index]
+    candidate = _candidate_from_dict(candidate_data)
+    score = None
+    if args.score:
+        scores = search_result.summary.get("scores", [])
+        if candidate_index < len(scores):
+            score = _score_from_dict(scores[candidate_index])
+    allowed_ext = getattr(args, "allowed_extension", None) or None
+    allowed_extensions = set(allowed_ext) if allowed_ext else None
+    constraints = DownloadConstraint(
+        allow_locked=getattr(args, "allow_locked", False),
+        require_score_min=getattr(args, "score_min", None),
+        max_files=getattr(args, "max_files", None),
+        max_total_bytes=getattr(args, "max_total_bytes", None),
+        allowed_extensions=allowed_extensions,
+    )
+    request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.ALBUM,
+        query=f"{args.artist} - {args.album}",
+        score=score,
+        constraints=constraints,
+    )
+    result = DownloadPlanningService().plan_download(request)
+    print(_render_result(search_result))
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def _candidate_from_dict(data: dict[str, Any]) -> SearchCandidate:
+    files = [
+        CandidateFile(
+            filename=f["filename"],
+            size_bytes=f.get("size_bytes"),
+            declared_bitrate=f.get("declared_bitrate"),
+            extension=f.get("extension"),
+            duration_seconds=f.get("duration_seconds"),
+            locked=f.get("locked", False),
+            metadata=f.get("metadata", {}),
+        )
+        for f in data.get("files", [])
+    ]
+    return SearchCandidate(
+        candidate_id=data["candidate_id"],
+        provider=data.get("provider", "slskd"),
+        username=data.get("username"),
+        directory=data.get("directory"),
+        artist=data.get("artist"),
+        title=data.get("title"),
+        album=data.get("album"),
+        files=files,
+        warnings=data.get("warnings", []),
+        metadata=data.get("metadata", {}),
+    )
+
+
+def _score_from_dict(data: dict[str, Any]) -> CandidateScore:
+    from noqlen_flux.scoring import CandidateRisk, ScoreComponent, ScorePenalty, ScoreReason
+
+    components = [
+        ScoreComponent(
+            name=c["name"],
+            score=c["score"],
+            max_score=c["max_score"],
+            reasons=[ScoreReason(**r) for r in c.get("reasons", [])],
+            penalties=[ScorePenalty(**p) for p in c.get("penalties", [])],
+        )
+        for c in data.get("components", [])
+    ]
+    reasons = [ScoreReason(**r) for r in data.get("reasons", [])]
+    penalties = [ScorePenalty(**p) for p in data.get("penalties", [])]
+    return CandidateScore(
+        candidate_id=data["candidate_id"],
+        total=data["total"],
+        max_score=data["max_score"],
+        risk=CandidateRisk(data.get("risk", "low")),
+        confidence=data.get("confidence", 0.0),
+        components=components,
+        reasons=reasons,
+        penalties=penalties,
+        warnings=data.get("warnings", []),
+        metadata=data.get("metadata", {}),
+    )
 
 
 def run_transfer_plan_fake_track(args: argparse.Namespace) -> int:
@@ -1081,6 +1284,23 @@ def _render_result(result: FluxResult) -> str:
                     parts.append(f"duration={f['duration_seconds']}s")
                 parts[-1] += lock_tag
                 lines.append("".join(parts))
+    if result.operation == "download-planning" and result.summary.get("intent"):
+        lines.append(f"intent: {result.summary['intent']}")
+        candidate_id = result.summary.get("candidate_id")
+        if candidate_id:
+            lines.append(f"candidate: {candidate_id}")
+        item_count = result.summary.get("item_count")
+        if item_count is not None:
+            lines.append(f"planned items: {item_count}")
+        total_size = result.summary.get("total_size_bytes")
+        if total_size is not None:
+            lines.append(f"total size: {total_size} bytes")
+        target_root = result.summary.get("target_relative_root")
+        if target_root:
+            lines.append(f"target: {target_root}")
+        plan_warnings = result.summary.get("warnings", [])
+        for w in plan_warnings:
+            lines.append(f"  plan warning: {w}")
     if result.operation == "musiclab-scoring":
         dataset_id = result.summary.get("dataset_id")
         if dataset_id is not None:

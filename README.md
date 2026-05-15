@@ -200,6 +200,32 @@ noqlen-flux download plan fake album --artist "Example Artist" --album "Example 
 
 Planning supports constraints such as `--score-min`, `--max-files`, `--max-total-bytes`, and `--allow-locked`. These affect only the plan, never execution.
 
+### Slskd Search-to-Download Plan Preview
+
+The CLI can transform slskd search results into download plans. This is a preview only — no download, queue, or transfer is executed. Network access is disabled by default; `--allow-network` is required for real search.
+
+Plan a track download from slskd search (offline by default):
+
+```bash
+noqlen-flux download plan slskd track --artist "Example Artist" --title "Example Track" --offline
+```
+
+Plan an album download from slskd search:
+
+```bash
+noqlen-flux download plan slskd album --artist "Example Artist" --album "Example Album" --offline
+```
+
+Real network search requires explicit opt-in:
+
+```bash
+noqlen-flux download plan slskd track --artist "Artist" --title "Track" --url http://localhost:5000 --api-key-env SLSKD_API_KEY --allow-network
+```
+
+Planning options include `--score`, `--candidate-index`, `--score-min`, `--max-files`, `--max-total-bytes`, `--allow-locked`, and `--allowed-extension`. These affect only the plan, never execution.
+
+Real download, queue, and transfer are not implemented yet. The slskd adapter is isolated and replaceable by a future `NativeSoulseekProvider`.
+
 There is no real download, no queue, no transfer, no `slskd`, and no filesystem write beyond the workspace safety boundary. Real execution will come in a separate future commit.
 
 ## Transfer And Queue Planning Foundation
