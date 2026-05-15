@@ -317,3 +317,281 @@ def test_audio_probe_service_does_not_create_files(
     service.probe(req, backend, dry_run=False)
     after = set(tmp_path.iterdir())
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# Spectral cutoff / low-pass false-positive protection tests
+# ---------------------------------------------------------------------------
+
+
+def _spectral_cutoff_finding() -> AudioProbeFinding:
+    return AudioProbeFinding(
+        code="spectral-cutoff-9-4khz",
+        message="Spectral analysis shows energy cutoff around 9.4 kHz. Common in lossy encodes or streaming sources.",
+        category="heuristic_warning",
+        confidence=0.6,
+    )
+
+
+def _decode_failure_finding() -> AudioProbeFinding:
+    return AudioProbeFinding(
+        code="decode-failure",
+        message="Audio decode failed.",
+        category="objective_failure",
+        confidence=1.0,
+    )
+
+
+def _decode_ok_finding() -> AudioProbeFinding:
+    return AudioProbeFinding(
+        code="decode-ok",
+        message="Audio stream decoded successfully.",
+        category="diagnostic",
+        confidence=1.0,
+    )
+
+
+def test_spectral_cutoff_9_4khz_only_is_heuristic_warning(
+    service: AudioProbeService, workspace: Path
+) -> None:
+    backend = FakeProbeBackend(
+        grade="excellent",
+        decode_ok=True,
+        has_audio_stream=True,
+        extra_findings=[_spectral_cutoff_finding()],
+    )
+    req = AudioProbeRequest(
+        request_id="req-1",
+        item_id="item-1",
+        relative_path="incoming/demo.flac",
+        workspace_root=str(workspace),
+    )
+    result = service.probe(req, backend, dry_run=False)
+    probe_result = result.summary.get("probe_result", {})
+
+    has_objective = any(
+        f.get("category") == "objective_failure"
+        for f in probe_result.get("findings", [])
+    )
+    has_heuristic = any(
+        f.get("category") == "heuristic_warning"
+        for f in probe_result.get("findings", [])
+    )
+    has_spectral = any(
+        f.get("code") == "spectral-cutoff-9-4khz"
+        for f in probe_result.get("findings", [])
+    )
+
+    assert has_spectral, "spectral-cutoff-9-4khz finding should be present"
+    assert has_heuristic, "spectral cutoff should be a heuristic_warning"
+    assert not has_objective, "spectral cutoff isolated must NOT be objective_failure"
+    assert result.status != Status.FAILED, "spectral cutoff alone must not cause FAILED status"
+
+
+def test_qobuz_like_cutoff_9_4khz_decode_ok_is_not_bad(
+    service: AudioProbeService, workspace: Path
+) -> None:
+    backend = FakeProbeBackend(
+        grade="excellent",
+        decode_ok=True,
+        has_audio_stream=True,
+        extra_findings=[_spectral_cutoff_finding(), _decode_ok_finding()],
+    )
+    req = AudioProbeRequest(
+        request_id="req-1",
+        item_id="item-1",
+        relative_path="incoming/qobuz_like.flac",
+        workspace_root=str(workspace),
+    )
+    result = service.probe(req, backend, dry_run=False)
+    probe_result = result.summary.get("probe_result", {})
+
+    has_spectral = any(
+        f.get("code") == "spectral-cutoff-9-4khz"
+        for f in probe_result.get("findings", [])
+    )
+    has_decode_ok = any(
+        f.get("code") == "decode-ok"
+        for f in probe_result.get("findings", [])
+    )
+    has_objective = any(
+        f.get("category") == "objective_failure"
+        for f in probe_result.get("findings", [])
+    )
+
+    assert has_spectral, "spectral cutoff finding should be present"
+    assert has_decode_ok, "decode-ok finding should be present"
+    assert not has_objective, (
+        "qobuz-like cutoff with decode_ok must NOT produce objective_failure"
+    )
+
+
+def test_lowpass_suspicion_only_is_heuristic_warning_not_objective(
+    service: AudioProbeService, workspace: Path
+) -> None:
+    lowpass_finding = AudioProbeFinding(
+        code="lowpass-suspicion",
+        message="Energy rolloff suggests low-pass filter may have been applied.",
+        category="heuristic_warning",
+        confidence=0.55,
+    )
+    backend = FakeProbeBackend(
+        grade="excellent",
+        decode_ok=True,
+        has_audio_stream=True,
+        extra_findings=[lowpass_finding],
+    )
+    req = AudioProbeRequest(
+        request_id="req-1",
+        item_id="item-1",
+        relative_path="incoming/lowpass.flac",
+        workspace_root=str(workspace),
+    )
+    result = service.probe(req, backend, dry_run=False)
+    probe_result = result.summary.get("probe_result", {})
+
+    has_objective = any(
+        f.get("category") == "objective_failure"
+        for f in probe_result.get("findings", [])
+    )
+    has_lowpass = any(
+        f.get("code") == "lowpass-suspicion"
+        for f in probe_result.get("findings", [])
+    )
+
+    assert has_lowpass, "lowpass-suspicion finding should be present"
+    assert not has_objective, "lowpass suspicion alone must NOT be objective_failure"
+
+
+def test_lowpass_suspicion_with_valid_metadata_is_not_bad(
+    service: AudioProbeService, workspace: Path
+) -> None:
+    lowpass_finding = AudioProbeFinding(
+        code="lowpass-suspicion",
+        message="Energy rolloff detected, but file metadata and decode are valid.",
+        category="heuristic_warning",
+        confidence=0.55,
+    )
+    decode_ok = AudioProbeFinding(
+        code="decode-ok",
+        message="Audio stream decoded successfully.",
+        category="diagnostic",
+        confidence=1.0,
+    )
+    backend = FakeProbeBackend(
+        grade="excellent",
+        decode_ok=True,
+        has_audio_stream=True,
+        extra_findings=[lowpass_finding, decode_ok],
+    )
+    req = AudioProbeRequest(
+        request_id="req-1",
+        item_id="item-1",
+        relative_path="incoming/lowpass_valid.flac",
+        workspace_root=str(workspace),
+    )
+    result = service.probe(req, backend, dry_run=False)
+    probe_result = result.summary.get("probe_result", {})
+
+    has_objective = any(
+        f.get("category") == "objective_failure"
+        for f in probe_result.get("findings", [])
+    )
+    has_lowpass = any(
+        f.get("code") == "lowpass-suspicion"
+        for f in probe_result.get("findings", [])
+    )
+
+    assert has_lowpass, "lowpass-suspicion finding should be present"
+    assert not has_objective, (
+        "lowpass + decode_ok + valid metadata must NOT produce objective_failure"
+    )
+    assert result.status != Status.FAILED, (
+        "lowpass + valid metadata must not produce FAILED status"
+    )
+
+
+def test_lowpass_plus_decode_failure_is_bad_by_decode_not_lowpass(
+    service: AudioProbeService, workspace: Path
+) -> None:
+    lowpass_finding = AudioProbeFinding(
+        code="lowpass-suspicion",
+        message="Energy rolloff detected.",
+        category="heuristic_warning",
+        confidence=0.55,
+    )
+    decode_fail = AudioProbeFinding(
+        code="decode-failure",
+        message="Audio decode failed.",
+        category="objective_failure",
+        confidence=1.0,
+    )
+    backend = FakeProbeBackend(
+        grade="excellent",
+        decode_ok=False,
+        has_audio_stream=True,
+        extra_findings=[lowpass_finding, decode_fail],
+    )
+    req = AudioProbeRequest(
+        request_id="req-1",
+        item_id="item-1",
+        relative_path="incoming/lowpass_bad.flac",
+        workspace_root=str(workspace),
+    )
+    result = service.probe(req, backend, dry_run=False)
+    probe_result = result.summary.get("probe_result", {})
+
+    has_objective = any(
+        f.get("category") == "objective_failure"
+        for f in probe_result.get("findings", [])
+    )
+    decode_fail_findings = [
+        f for f in probe_result.get("findings", [])
+        if f.get("category") == "objective_failure"
+    ]
+    lowpass_findings = [
+        f for f in probe_result.get("findings", [])
+        if f.get("category") == "heuristic_warning"
+    ]
+
+    assert has_objective, "decode_failure should produce objective_failure"
+    assert any(f.get("code") == "decode-failure" for f in decode_fail_findings), (
+        "objective_failure should be decode-failure, not lowpass"
+    )
+    assert any(f.get("code") == "lowpass-suspicion" for f in lowpass_findings), (
+        "lowpass should still be present as heuristic_warning"
+    )
+    assert result.status == Status.FAILED, (
+        "decode_failure should cause FAILED (but due to decode, not lowpass)"
+    )
+
+
+def test_quality_service_does_not_call_routing_service() -> None:
+    from noqlen_flux.services.quality import QualityService
+
+    service = QualityService()
+    result = service.evaluate_fake_quality(
+        item_id="item-1",
+        grade="bad",
+        findings=[{
+            "code": "spectral-cutoff-9-4khz",
+            "message": "Spectral cutoff at 9.4 kHz.",
+            "kind": "heuristic_warning",
+            "severity": "warning",
+            "confidence": 0.6,
+        }],
+    )
+    result_dict = result.to_dict()
+    assert "routing_decision" not in str(result_dict)
+    assert "RoutingDecision" not in str(result_dict)
+    assert "RoutingService" not in str(result_dict)
+    assert "routing" not in result_dict.get("operation", "")
+
+
+def test_audio_probe_service_does_not_import_routing_service() -> None:
+    from noqlen_flux.services import audio_probe as mod
+
+    source = open(mod.__file__).read()
+    assert "RoutingService" not in source
+    assert "RoutingDecisionService" not in source
+    assert "routing" not in source.lower().split("from")[-1].split("import")[0]

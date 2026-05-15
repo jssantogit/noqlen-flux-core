@@ -92,7 +92,11 @@ class FakeProbeBackend(ProbeBackend):
 
         findings: list[AudioProbeFinding] = list(self._extra_findings)
 
-        if self._grade == "excellent":
+        has_explicit_objective = any(
+            f.category == "objective_failure" for f in self._extra_findings
+        )
+
+        if not has_explicit_objective and self._grade == "excellent":
             findings.append(
                 AudioProbeFinding(
                     code="probe-ok",
@@ -110,7 +114,7 @@ class FakeProbeBackend(ProbeBackend):
                         confidence=1.0,
                     )
                 )
-        elif self._grade == "medium":
+        elif not has_explicit_objective and self._grade == "medium":
             findings.append(
                 AudioProbeFinding(
                     code="heuristic-warning",
@@ -119,7 +123,7 @@ class FakeProbeBackend(ProbeBackend):
                     confidence=0.7,
                 )
             )
-        elif self._grade == "bad":
+        elif not has_explicit_objective and self._grade == "bad":
             if not self._has_audio_stream:
                 findings.append(
                     AudioProbeFinding(
@@ -147,7 +151,7 @@ class FakeProbeBackend(ProbeBackend):
                         confidence=1.0,
                     )
                 )
-        elif self._grade == "unknown":
+        elif not has_explicit_objective and self._grade == "unknown":
             findings.append(
                 AudioProbeFinding(
                     code="insufficient-data",
