@@ -481,6 +481,61 @@ Source and target relative paths are validated for safety: absolute paths and pa
 
 The separation must remain: routing (planned decision) → staging (planned filesystem change) → staging execution (orchestrated workflow) → cleanup planning (planned cleanup). `CleanupPlanningService` does not execute `StagingExecutionService` or `SafeFileOperationService` for deletion. `CleanupPlanningService` consumes `CleanupCandidate` but does not alter routing, staging, or quality results.
 
+## Cleanup Execution Foundation (Bloco F)
+
+Cleanup execution is a separate concern from cleanup planning. `CleanupPlanningService` produces a `CleanupPlan` (planned-only). `CleanupExecutionService` consumes a `CleanupExecutionRequest` and executes allowed conservative operations within the workspace boundary.
+
+Flux owns these cleanup execution models:
+
+- `CleanupExecutionPolicy` — versioned execution policy with allowed operations: `allow_remove_temp_reports`, `allow_remove_staging_temp`, `allow_move_to_trash`, `allow_move_to_rejected_retained`, `allow_clean_invalid_manifests`, `allow_clean_incomplete_artifacts`, `allow_delete` (default false). Safety gates: `require_explicit_apply`, `workspace_only`, `block_absolute_path`, `block_traversal`, `block_symlink_escape`, `block_protected_roots`.
+- `CleanupExecutionAction` — execution actions: `remove_temp_report`, `remove_staging_temp`, `move_to_trash`, `move_to_rejected_retained`, `clean_invalid_manifest`, `clean_incomplete_artifact`, `blocked`, `skipped`.
+- `CleanupExecutionItem` — per-item execution state: `pending`, `executed`, `blocked`, `skipped`, `failed`.
+- `CleanupExecutionRequest` — binds a cleanup plan, workspace root, decisions, candidates, and policy into a single execution request.
+- `CleanupExecutionResult` — structured result with item counts, destructive action detection, and safety checks.
+- `AutoCleanupPolicy` — opt-in policy with `enabled=False` by default. Conservative and aggressive presets. Controls trigger conditions: `on_handoff`, `on_staging_complete`. Always workspace-only and never touches approved/import-ready items.
+
+`CleanupExecutionService` provides service-level cleanup execution:
+
+- **Dry-run is default**: All execution defaults to dry-run. `--apply` must be explicitly requested.
+- **Workspace containment**: `ensure_within_workspace()`, symlink escape detection, and path traversal blocking.
+- **Protected areas**: Approved, import-ready, handoff-ready, library, and archive paths are never touched.
+- **Allowed operations** (within workspace): remove temp reports, remove staging temp, move rejected to retained/trash, clean invalid manifests, clean incomplete artifacts.
+- **Blocked operations**: delete real library, delete outside workspace, delete approved/import-ready, delete quarantine without retention policy, delete rejected without explicit configuration.
+
+Hard delete requires all of: `--apply`, `policy.allow_delete=True`, target within workspace, retention expired, explicit confirmation, and structured report.
+
+Auto-cleanup (`cleanup auto-run`) is opt-in only. `AutoCleanupPolicy.enabled=False` by default. Conservative preset only allows safe cleanup actions. Aggressive preset adds move-to-trash. Always workspace-only, never touches real library, always generates a report.
+
+CLI commands:
+```bash
+noqlen-flux cleanup execute --workspace PATH --dry-run
+noqlen-flux cleanup execute --workspace PATH --apply
+noqlen-flux cleanup auto-run --workspace PATH --dry-run
+noqlen-flux cleanup auto-run --workspace PATH --apply --policy conservative
+```
+
+## MusicLab MVP End-to-End (Bloco F)
+
+The `mvp-end-to-end` scenario pack validates the complete pipeline end-to-end:
+
+search → scoring → download plan → queue/transfer → artifact → quality → routing → staging → handoff → cleanup dry-run/apply → final report
+
+12 mandatory scenarios covering:
+- `good_flac_to_handoff` — Good FLAC passes to handoff, no cleanup action.
+- `mp3_320_good_to_handoff` — MP3 320 passes to handoff.
+- `qobuz_like_cutoff_to_handoff_or_review` — Qobuz-like cutoff is never auto-punished.
+- `fake_flac_to_review_or_quarantine` — Fake FLAC routes to review, never rejected/deleted.
+- `corrupt_file_to_rejected_no_delete` — Corrupt files are rejected, never deleted.
+- `incomplete_download_cleanup_candidate` — Incomplete downloads are cleanup candidates, safe only.
+- `rejected_retention_not_expired` — Rejected items with active retention are not cleaned.
+- `rejected_retention_expired_workspace_only` — Expired rejected items only cleanable within workspace.
+- `quarantine_retention_not_expired` — Quarantine items with active retention are not cleaned.
+- `approved_never_cleanup` — Approved items are never cleaned up.
+- `handoff_manifest_invalid_cleanup_safe` — Invalid manifests do not trigger destructive cleanup.
+- `source_profile_suspicious_no_destructive_action` — Suspicious source profiles do not trigger destructive actions.
+
+MusicLab detects any `destructive_action_detected` that is undue and flags it as a critical error.
+
 ## MusicLab
 
 MusicLab is the foundation for future scoring, quality, routing, quarantine/rejected, cleanup, and handoff calibration. Those workflows should be calibrated against isolated sessions and fake or generated fixtures before any real provider, download, staging, or handoff behavior exists.

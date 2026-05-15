@@ -55,7 +55,7 @@ Cleanup planning does not delete anything. `CleanupPlanningService` evaluates `C
 
 `plan_delete` is only a planned decision. It does not execute any filesystem operation. It is expressed as a `PlannedChange`, never an `AppliedChange`.
 
-`auto_delete_enabled` exists only as a policy field and never executes any deletion. Auto-delete does not exist in this commit. Future auto-delete would require a separate executor layer, explicit policy, reports, limits, workspace safety, and explicit apply.
+`auto_delete_enabled` exists only as a policy field and never executes any deletion.
 
 Heuristic findings must never cause automatic deletion. Heuristic-only candidates are routed to `review`, never `plan_delete`, regardless of policy configuration.
 
@@ -63,7 +63,44 @@ Objective failures can inform cleanup planning but still as a plan only. `mark_d
 
 Absolute paths and path traversal markers are blocked in `CleanupCandidate.relative_path`. No candidate can reference a path outside the workspace boundary.
 
-Automated cleanup tests must use fake candidates, temporary directories, or controlled fixtures only. They must not use real music files, network access, or personal filesystem paths.
+### Cleanup Execution (Bloco F)
+
+`CleanupExecutionService` provides conservative cleanup execution with explicit safety gates:
+
+- **Dry-run is default**: All execution defaults to dry-run. `--apply` must be explicitly requested.
+- **Workspace-only**: All operations are confined to the workspace root. Paths outside the workspace are blocked.
+- **No delete by default**: `CleanupExecutionPolicy.allow_delete` is `False`. Delete requires explicit policy configuration plus `--apply`.
+- **Protected areas**: Approved, import-ready, handoff-ready, library, and archive paths are never touched.
+- **Symlink blocked**: Symlink sources are rejected before any operation.
+- **Hard delete requires**: `--apply` + `policy.allow_delete=True` + target in workspace + retention expired + explicit confirmation + structured report.
+
+Allowed conservative operations (workspace-only, dry-run default):
+- Remove expired temporary reports (`stale_report`)
+- Remove staging temporary files (`temporary`)
+- Move rejected items to `rejected-retained/` (`rejected` with `allow_move_to_rejected_retained=True`)
+- Clean invalid manifest files (`stale_manifest`)
+- Clean incomplete artifact directories (`orphaned`)
+
+Prohibited by default:
+- Delete real music library
+- Delete outside workspace
+- Delete approved/import-ready items
+- Delete quarantine items without explicit retention policy
+- Delete rejected items without `--apply` + policy + confirmation
+- Any destructive operation on `delete_eligible` items (always blocked)
+
+### Auto-Cleanup (Bloco F)
+
+Auto-cleanup is **opt-in only**. `AutoCleanupPolicy.enabled` is `False` by default.
+
+- Never runs automatically — must be explicitly invoked (`cleanup auto-run --apply --policy conservative`)
+- Conservative preset: only safe operations (remove temp reports/staging, clean invalid manifests/incomplete artifacts)
+- Aggressive preset: adds move-to-trash for expired rejected items
+- Workspace-only: never deletes outside workspace
+- Never touches real music library
+- Policy-driven: requires explicit `AutoCleanupPolicy` configuration
+- Report generation: auto-cleanup always produces a report artifact
+- Approved items: never auto-cleaned regardless of policy
 
 ## Path Safety
 

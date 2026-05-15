@@ -680,3 +680,45 @@ noqlen-flux cleanup plan fake --allow-delete-planning --dry-run
 ```
 
 This is not real cleanup, auto-delete, or music library management. `delete_eligible` does not mean deletion has occurred. `plan_delete` is only a planned decision expressed as a `PlannedChange`, never an `AppliedChange`. `auto_delete_enabled` exists only as a policy field and never executes any deletion. Heuristic findings never cause automatic deletion. All cleanup commands are planned-only and have no `--apply` mode. Apply mode is explicitly rejected with a clear message.
+
+## Cleanup Execution (Bloco F)
+
+Cleanup execution is separate from planning. `CleanupExecutionService` executes a `CleanupExecutionRequest` against the workspace with strict safety gates. All operations are workspace-only and conservative by default.
+
+Execute cleanup on a workspace (dry-run):
+
+```bash
+noqlen-flux cleanup execute --workspace ./flux-workspace --dry-run
+```
+
+Execute cleanup with apply (only allowed operations within workspace):
+
+```bash
+noqlen-flux cleanup execute --workspace ./flux-workspace --apply
+```
+
+Allowed operations: remove expired temp reports, remove staging temp, move rejected items to `rejected-retained/`, clean invalid manifests, clean incomplete artifacts.
+
+Prohibited: delete real library, delete outside workspace, delete approved/import-ready, delete quarantine/rejected without explicit policy + apply + confirmation. Hard delete requires `policy.allow_delete=True` + `--apply` + retention expired + explicit confirmation + structured report.
+
+## Auto-Cleanup (Bloco F)
+
+Auto-cleanup is opt-in only. `AutoCleanupPolicy.enabled=False` by default. Never runs automatically.
+
+Preview auto-cleanup (dry-run):
+
+```bash
+noqlen-flux cleanup auto-run --workspace ./flux-workspace --dry-run
+```
+
+Apply auto-cleanup with conservative policy:
+
+```bash
+noqlen-flux cleanup auto-run --workspace ./flux-workspace --apply --policy conservative
+```
+
+Conservative preset: only safe cleanup (remove temp reports/staging, clean invalid/incomplete). Aggressive preset adds move-to-trash for expired rejected items. Always workspace-only, never touches real library, always generates a report. Approved items are never auto-cleaned.
+
+## MVP Core Status
+
+The Noqlen Flux Core MVP is **locked** after Bloco F audit. The only pending structural work is `NativeSoulseekProvider` (future adapter, not a blocker). See `docs/release-checklist.md` for the full hardening checklist.
