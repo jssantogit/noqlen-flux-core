@@ -341,8 +341,11 @@ Flux owns these handoff models:
 - `HandoffQualityRef` — quality reference with grade, optional confidence, finding counts, and safe metadata.
 - `HandoffRoutingRef` — routing reference with outcome, action_type, reason_count, and safe metadata.
 - `HandoffCandidateRef` — candidate reference with optional candidate_id, provider, risk, score, and safe metadata.
-- `HandoffItem` — structured handoff entry with item_id, item_type, status, path, optional query_metadata, candidate, quality, routing, reports, warnings, errors, and safe metadata.
+- `HandoffItem` — structured handoff entry with item_id, item_type, status, path, forge_ready flag, optional query_metadata, candidate, quality, routing, reports, warnings, errors, and safe metadata.
 - `HandoffManifest` — aggregate manifest with handoff_version, source, items, reports, warnings, errors, and safe metadata.
+- `HandoffApplyResult` — per-item and aggregate apply outcome tracking (applied, blocked, skipped).
+- `HandoffApplyReport` — structured report written to workspace/reports/ on apply bridge execution.
+- `HandoffApplyBridge` — controlled, file-based bridge class for dry-run/apply operations. Opt-in only.
 - `HandoffValidationIssue` — validation issue with code, message, severity, optional item_id, and safe metadata.
 - `HandoffValidationResult` — validation result with valid flag, issues, warnings, errors, and safe metadata.
 
@@ -476,7 +479,7 @@ Staging CLI commands are adapters over `StagingPlanService` and `StagingExecutio
 
 Fileops CLI commands are adapters over `SafeFileOperationService`: `fileops demo --workspace PATH --dry-run` plans safe filesystem operations without executing them, while `fileops demo --workspace PATH --apply` executes mkdir/copy/move operations within the workspace boundary per policy. The CLI does not implement file operation logic, delete files, or perform operations outside the workspace. Default behavior is dry-run; `--apply` must be explicit.
 
-Handoff CLI commands are adapters over `HandoffManifestService`: `handoff demo --workspace PATH --dry-run` previews a safe demo handoff manifest without writing a file, while `handoff demo --workspace PATH --apply` writes the manifest JSON inside `PATH/manifests`. `handoff validate --workspace PATH --demo` validates a demo manifest. The CLI does not implement manifest logic, call Forge, perform real import, or touch a real music library. Default behavior is dry-run; `--apply` must be explicit.
+Handoff CLI commands are adapters over `HandoffManifestService` and `HandoffApplyBridge`: `handoff demo --workspace PATH --dry-run` previews a safe demo handoff manifest without writing a file, while `handoff demo --workspace PATH --apply` writes the manifest JSON inside `PATH/manifests`. `handoff validate --workspace PATH --manifest RELATIVE_PATH` validates an existing manifest file. `handoff apply --workspace PATH --manifest RELATIVE_PATH --dry-run` previews the apply bridge; `--apply` executes it, writing a `HandoffApplyReport` to `PATH/reports/`. The CLI does not implement manifest logic, call Forge, perform real import, or touch a real music library. Default behavior is dry-run; `--apply` must be explicit.
 
 Cleanup planning CLI commands are adapters over `CleanupPlanningService`: `cleanup plan fake --dry-run` evaluates fake cleanup candidates against the default policy and returns a `FluxResult` with `PlannedChange` objects. `cleanup plan fake --allow-delete-planning --dry-run` uses a policy with `allow_delete_planning=true` but still does not delete anything. `cleanup plan fake --workspace PATH --dry-run` accepts an optional workspace path for future integration. The CLI does not implement cleanup logic, delete files, move files, create files, or perform real cleanup. Apply mode is explicitly rejected with a clear message. All cleanup commands are planned-only and have no `--apply` mode.
 

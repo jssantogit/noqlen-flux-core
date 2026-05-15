@@ -393,6 +393,33 @@ Paths in manifests must be relative to the workspace when possible. Absolute pat
 
 Dry-run is the default for manifest generation and preview. Apply mode requires an explicit `--apply` flag before any manifest file is written.
 
+## Handoff Apply Bridge
+
+The `HandoffApplyBridge` provides a controlled, file-based, opt-in boundary for Flux → Forge handoff. Safety guarantees:
+
+- **Workspace-only**: All operations confined to workspace root.
+- **File-based**: Operates on existing manifest files; no direct Forge import.
+- **Dry-run default**: `--apply` must be explicit.
+- **No delete**: No destructive operations.
+- **No Forge import**: Bridge does not import, call, or depend on Forge.
+- **No slskd**: No provider dependencies.
+- **No network**: No HTTP requests or external connections.
+- **Opt-in**: The bridge must be explicitly invoked; manifests are never auto-applied.
+- **Report confinement**: Apply reports are written only to `workspace/reports/`.
+- **Guard rules**: Only `approved` items with valid paths can be handed off. Items with unknown type, quarantine, rejected, or delete_eligible status are blocked.
+
+### Forge Ready Gate
+
+Items are marked `forge_ready: true` only when:
+- Status is `approved`
+- Staging is `approved`
+- Routing is `approved`
+- Grade is not `bad` or `unknown`
+- No objective failures exist
+- Decode is confirmed okay
+
+Corrupt files, decode failures, rejected items, and quarantine items are automatically blocked from handoff. Lowpass suspicion and transcode suspicion alone do not block handoff permanently.
+
 Automated handoff tests must use temporary directories, fake fixtures, or controlled workspace layouts only. They must not use real music files, network access, or personal filesystem paths.
 
 ## Reports

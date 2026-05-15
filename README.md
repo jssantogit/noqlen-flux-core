@@ -578,7 +578,25 @@ Apply mode must be explicit before a manifest is written:
 noqlen-flux handoff demo --workspace ./flux-workspace --apply
 ```
 
-Manifests are confined to `workspace/manifests` and do not contain secrets, full lyrics, raw fingerprints, or raw provider payloads. This is not real Forge integration, import, cleanup, or music library management.
+Validate a manifest from file:
+
+```bash
+noqlen-flux handoff validate --workspace ./flux-workspace --manifest manifests/handoff-xxx.json
+```
+
+Preview handoff apply bridge (dry-run):
+
+```bash
+noqlen-flux handoff apply --workspace ./flux-workspace --manifest manifests/handoff-xxx.json --dry-run
+```
+
+Execute handoff apply bridge (writes report to workspace/reports/):
+
+```bash
+noqlen-flux handoff apply --workspace ./flux-workspace --manifest manifests/handoff-xxx.json --apply
+```
+
+The apply bridge is controlled, file-based, and opt-in. It checks each item for Forge readiness, produces an apply report with applied/blocked/skipped counts, and writes reports only within the workspace. Manifests and reports are confined to `workspace/manifests` and `workspace/reports/`. No secrets, full lyrics, raw fingerprints, or raw provider payloads. No real Forge integration, import, cleanup, or music library management. No delete operations.
 
 ## Cleanup Planning Foundation
 

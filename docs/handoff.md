@@ -36,6 +36,7 @@ Each `HandoffItem` contains:
 - `item_type` — type of item: `track`, `album`, or `unknown`.
 - `status` — current status: `approved`, `quarantine`, `rejected`, `review`, `delete_eligible`, or `unknown`.
 - `path` — `HandoffPathRef` with relative path and optional workspace area.
+- `forge_ready` — indicates whether the item is ready for handoff to Forge. Only set to `true` when status is `approved`, staging is `approved`, routing is `approved`, grade is not `bad` or `unknown`, and no objective failures exist.
 - `query_metadata` — optional safe metadata about the original search query.
 - `candidate` — optional `HandoffCandidateRef` with candidate identification and scoring info.
 - `quality` — optional `HandoffQualityRef` with quality grade and finding counts.
@@ -44,6 +45,40 @@ Each `HandoffItem` contains:
 - `warnings` — list of warning messages.
 - `errors` — list of error messages.
 - `metadata` — safe metadata.
+
+## Handoff Apply Bridge
+
+The handoff apply bridge is a controlled, file-based, opt-in boundary for Flux → Forge handoff. It operates on existing manifest files and produces apply reports.
+
+### Apply Flow
+
+1. Flux generates a manifest via `handoff demo --apply` to `workspace/manifests/`.
+2. The manifest is validated with `handoff validate --manifest`.
+3. The apply bridge reads the manifest and checks each item for Forge readiness:
+   - Only items with `status: approved` can be handed off.
+   - Items with unknown type are skipped.
+   - Items failing validation are blocked.
+4. The bridge produces a `HandoffApplyReport` with applied/blocked/skipped counts.
+5. On `--apply`, the report is written to `workspace/reports/`.
+
+### Guard Rules
+
+- Non-approved items (quarantine, rejected, review, delete_eligible) are blocked.
+- Corrupt/decode_failure scenarios produce blocked handoff items.
+- Qobuz-like cutoff with decode_ok is not blocked.
+- Lowpass suspicion alone does not block handoff.
+- Good-category scenarios produce forge_ready items when fully approved.
+- Delete-eligible staging blocks handoff.
+
+### Key Properties
+
+- **File-based**: Works exclusively on manifest files in workspace. No direct Forge integration.
+- **Workspace-only**: All operations confined to workspace root.
+- **Dry-run default**: `--apply` must be explicit.
+- **No delete**: No destructive operations.
+- **No import**: No automatic import into Forge.
+- **No slskd**: No provider dependencies in the bridge.
+- **Opt-in**: Bridge must be explicitly invoked.
 
 ## Forbidden Fields
 
@@ -63,10 +98,11 @@ The intended future flow is:
 1. Flux searches, downloads (via provider), validates, routes, and stages items.
 2. Flux generates a `HandoffManifest` with safe, versioned, and auditable data.
 3. The manifest is written to `workspace/manifests/` as a JSON file.
-4. Forge reads the manifest and performs metadata correction, enrichment, import orchestration, and library organization.
-5. Forge does not download; Flux does not correct final library metadata.
+4. The manifest is validated and the apply bridge produces a `HandoffApplyReport`.
+5. Forge reads the manifest and apply report to perform metadata correction, enrichment, import orchestration, and library organization.
+6. Forge does not download; Flux does not correct final library metadata.
 
-This integration is not implemented in this commit. The manifest contract is the foundation for that future boundary.
+The handoff apply bridge is implemented as a controlled, file-based boundary. Forge integration beyond the manifest contract is not implemented in this bootstrap repository. The `HandoffApplyBridge` class and `forge_ready` field on `HandoffItem` provide the contractual foundation for future Forge consumption.
 
 ## CLI Usage
 
@@ -88,4 +124,22 @@ Validate a demo manifest:
 noqlen-flux handoff validate --workspace ./flux-workspace --demo
 ```
 
-Manifest files are confined to `workspace/manifests` and do not perform network calls, downloads, imports, cleanup, or music library writes.
+Validate an existing manifest file:
+
+```bash
+noqlen-flux handoff validate --workspace ./flux-workspace --manifest manifests/handoff-xxx.json
+```
+
+Preview handoff apply (dry-run, no file writes):
+
+```bash
+noqlen-flux handoff apply --workspace ./flux-workspace --manifest manifests/handoff-xxx.json --dry-run
+```
+
+Execute handoff apply bridge (writes report to workspace/reports/):
+
+```bash
+noqlen-flux handoff apply --workspace ./flux-workspace --manifest manifests/handoff-xxx.json --apply
+```
+
+Manifest files are confined to `workspace/manifests/`. Apply reports are confined to `workspace/reports/`. No network calls, downloads, imports, cleanup, or music library writes are performed.
