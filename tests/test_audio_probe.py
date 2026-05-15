@@ -236,7 +236,7 @@ def test_audio_probe_service_apply_bad(
 ) -> None:
     backend = FakeProbeBackend(grade="bad", has_audio_stream=False, decode_ok=False)
     result = service.probe(probe_request, backend, dry_run=False)
-    assert result.status == Status.FAILED
+    assert result.status == Status.WARNING
     assert result.summary["success"] is False
 
 
@@ -561,8 +561,8 @@ def test_lowpass_plus_decode_failure_is_bad_by_decode_not_lowpass(
     assert any(f.get("code") == "lowpass-suspicion" for f in lowpass_findings), (
         "lowpass should still be present as heuristic_warning"
     )
-    assert result.status == Status.FAILED, (
-        "decode_failure should cause FAILED (but due to decode, not lowpass)"
+    assert result.status == Status.WARNING, (
+        "decode_failure + lowpass should produce WARNING (probe succeeded with findings, quality interprets them)"
     )
 
 

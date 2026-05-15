@@ -348,6 +348,15 @@ def build_parser() -> argparse.ArgumentParser:
     quality_fake.add_argument("--item-id", default="fake-item-1", help="Optional item id")
     quality_fake.set_defaults(func=run_quality_fake)
 
+    quality_inspect = quality_subparsers.add_parser("inspect", help="Inspect a file for quality using probe backend")
+    quality_inspect.add_argument("--workspace", required=True, help="Workspace root path")
+    quality_inspect.add_argument("--path", required=True, help="Relative path to file within workspace")
+    quality_inspect.add_argument("--item-id", help="Optional item id")
+    quality_inspect_mode = quality_inspect.add_mutually_exclusive_group()
+    quality_inspect_mode.add_argument("--dry-run", action="store_true", help="Plan inspection without executing (default)")
+    quality_inspect_mode.add_argument("--apply", action="store_true", help="Execute quality inspection and write report to workspace/reports")
+    quality_inspect.set_defaults(func=run_quality_inspect)
+
     routing = subparsers.add_parser("routing", help="Plan post-download routing decisions (planned-only, no execution)")
     routing_subparsers = routing.add_subparsers(dest="routing_command")
 
@@ -1303,6 +1312,47 @@ def run_quality_fake(args: argparse.Namespace) -> int:
         item_id=args.item_id,
         grade=args.grade,
     )
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_quality_inspect(args: argparse.Namespace) -> int:
+    """Inspect a file for quality using a probe backend.
+
+    Defaults to dry-run with fake probe backend. --apply uses real ffprobe
+    if available and writes report to workspace/reports.
+    """
+    from noqlen_flux.services.audio_probe import FakeProbeBackend, FfmpegProbeBackend
+    from pathlib import Path
+
+    dry_run = not getattr(args, "apply", False)
+    item_id = getattr(args, "item_id", None) or Path(args.path).stem
+    workspace = args.workspace
+
+    if dry_run:
+        backend = FakeProbeBackend(grade="excellent")
+    else:
+        backend = FfmpegProbeBackend()
+        if not backend.is_available():
+            from noqlen_flux.results import FluxResult, Status, FluxError
+            print(_render_result(FluxResult(
+                operation="quality",
+                status=Status.FAILED,
+                errors=[FluxError(
+                    code="ffprobe-unavailable",
+                    message="ffprobe/ffmpeg is not available. Install ffmpeg or use --dry-run for fake probe.",
+                )],
+            )))
+            return 1
+
+    result = QualityService().inspect_file(
+        item_id=item_id,
+        relative_path=args.path,
+        workspace_root=workspace,
+        backend=backend,
+        dry_run=dry_run,
+    )
+
     print(_render_result(result))
     return _exit_code(result.status)
 

@@ -581,18 +581,11 @@ class AudioProbeService(FluxService):
                     self.warning("probe-warning", w, severity=Severity.WARNING, context={"item_id": result.item_id})
                 )
 
-        has_objective_failures = any(
-            f.category == "objective_failure" for f in result.findings
+        step_status = (
+            Status.FAILED if errors
+            else Status.WARNING if (warnings or not result.success)
+            else Status.SUCCESS
         )
-
-        if has_objective_failures:
-            errors.append(
-                self.error(
-                    "objective-failure",
-                    "Objective failure(s) found during audio probe",
-                    context={"item_id": result.item_id},
-                )
-            )
 
         artifact = Artifact(
             kind="audio-probe-result",
