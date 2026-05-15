@@ -848,6 +848,219 @@ def build_source_profile_pack() -> tuple[MusicLabScenarioPack, dict[str, Synthet
     return pack, fixtures
 
 
+def build_advanced_quality_pack() -> tuple[MusicLabScenarioPack, dict[str, SyntheticFixture]]:
+    scenarios: list[MusicLabScenario] = []
+    fixtures: dict[str, SyntheticFixture] = {}
+
+    specs = [
+        (
+            "real-flac-good",
+            "Real FLAC 16/44.1 proven good - should be EXCELLENT",
+            ScenarioCategory.GOOD,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+            ),
+        ),
+        (
+            "fake-flac-from-mp3",
+            "Fake FLAC transcoded from MP3 - HEURISTIC only, not BAD, not rejected",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                lowpass_suspicion=True, spectral_cutoff_hz=16000,
+                transcode_cutoff_source="mp3-320",
+            ),
+        ),
+        (
+            "fake-24bit-detected",
+            "Fake 24-bit depth on 16-bit content - HEURISTIC, not objective",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=24,
+                decode_ok=True, has_audio_stream=True,
+                fake_bit_depth=True,
+            ),
+        ),
+        (
+            "fake-96khz-detected",
+            "Fake 96 kHz on 44.1 kHz content - HEURISTIC, not objective",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=96000, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                fake_sample_rate=True,
+            ),
+        ),
+        (
+            "upsampled-44-1-to-96",
+            "Upsampled from 44.1 to 96 kHz - HEURISTIC, not BAD, not delete",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=96000, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                upsampled=True,
+            ),
+        ),
+        (
+            "downsampled-96-to-44-1",
+            "Downsampled from 96 to 44.1 kHz - HEURISTIC, not BAD, not delete",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=24,
+                decode_ok=True, has_audio_stream=True,
+                downsampled=True,
+            ),
+        ),
+        (
+            "lossy-source-lossless-container",
+            "Lossy source in lossless container - HEURISTIC, review candidate",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                lossy_source_lossless_container=True,
+            ),
+        ),
+        (
+            "bitrate-container-mismatch",
+            "Bitrate/container incompatibility - HEURISTIC, review candidate",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                bitrate_container_mismatch=True,
+            ),
+        ),
+        (
+            "clipping-suspicion-only",
+            "Clipping detected but otherwise fine - REVIEW signal, not BAD",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+            ),
+        ),
+        (
+            "loudness-suspicion-only",
+            "Loudness anomaly but otherwise fine - REVIEW signal, not BAD",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+            ),
+        ),
+        (
+            "multiple-heuristics-review",
+            "Multiple heuristic signals together - must be review, not rejected/delete",
+            ScenarioCategory.SUSPICIOUS,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=24,
+                decode_ok=True, has_audio_stream=True,
+                lowpass_suspicion=True, spectral_cutoff_hz=16000,
+                bitrate_container_mismatch=True,
+            ),
+        ),
+        (
+            "objective-failure-plus-heuristics",
+            "Objective failure with heuristic signals - BAD via objective, not via heuristics",
+            ScenarioCategory.BAD,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=False, has_audio_stream=True,
+                lowpass_suspicion=True, spectral_cutoff_hz=12000,
+            ),
+        ),
+        (
+            "qobuz-like-advanced",
+            "Qobuz-like 9.4 kHz cutoff decode OK - HEURISTIC only, never bad, never delete",
+            ScenarioCategory.FALSE_POSITIVE,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                spectral_cutoff_hz=9400,
+                metadata={"source_profile": "qobuz_like"},
+            ),
+        ),
+        (
+            "mp3-320-good-lowpass-like",
+            "MP3 320 kbps with lowpass-like profile - HEURISTIC only, never BAD",
+            ScenarioCategory.FALSE_POSITIVE,
+            SyntheticProbeProfile(
+                codec="mp3", sample_rate=44100, bit_depth=16,
+                bitrate_bps=320000,
+                decode_ok=True, has_audio_stream=True,
+                spectral_cutoff_hz=16000,
+            ),
+        ),
+        (
+            "fake-flac-lowpass-decode-ok",
+            "Fake FLAC with lowpass but decode OK - HEURISTIC, not bad objetivo",
+            ScenarioCategory.FALSE_POSITIVE,
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                lowpass_suspicion=True,
+            ),
+        ),
+    ]
+
+    for fid, desc, category, probe in specs:
+        sct = MusicLabScenario(
+            scenario_id=fid,
+            description=desc,
+            category=category,
+            kind=_kind_for_advanced(scenario_id=fid, probe=probe),
+            severity=_severity_for_advanced(category=category, probe=probe),
+            tags=["advanced-quality", fid],
+            config=MusicLabScenarioConfig(),
+        )
+        scenarios.append(sct)
+        fixtures[fid] = _fixture(
+            fid, desc, "Test Artist", "Advanced Quality Track", probe,
+            tags=["advanced-quality", fid],
+        )
+
+    pack = MusicLabScenarioPack(
+        pack_id="advanced-quality",
+        description="Advanced quality calibration: fake FLAC, transcode, upsampling, downsampling, fake bit-depth/sample-rate, bitrate/container mismatch, clipping, loudness, multiple heuristics, objective+heuristic mix. CRITICAL: cutoff/lowpass isolated = heuristic_warning only. Fake/transcode = review candidate, never delete.",
+        version="1",
+        scenarios=scenarios,
+    )
+    return pack, fixtures
+
+
+def _kind_for_advanced(scenario_id: str, probe: SyntheticProbeProfile) -> ScenarioKind:
+    if "flac-from-mp3" in scenario_id or "transcode" in scenario_id or "lossy-source" in scenario_id or "bitrate-container" in scenario_id:
+        return ScenarioKind.TRANSCODE
+    if "fake-24bit" in scenario_id:
+        return ScenarioKind.FAKE_BIT_DEPTH
+    if "fake-96khz" in scenario_id:
+        return ScenarioKind.FAKE_SAMPLE_RATE
+    if "upsampled" in scenario_id:
+        return ScenarioKind.UPSAMPLED
+    if "downsampled" in scenario_id:
+        return ScenarioKind.DOWNSAMPLED
+    if "objective-failure" in scenario_id:
+        return ScenarioKind.CORRUPT
+    if "clipping" in scenario_id or "loudness" in scenario_id:
+        return ScenarioKind.EDGE_CASE
+    if "multiple-heuristics" in scenario_id:
+        return ScenarioKind.EDGE_CASE
+    return ScenarioKind.FORMAT_VARIANT
+
+
+def _severity_for_advanced(category: ScenarioCategory, probe: SyntheticProbeProfile) -> ScenarioSeverity:
+    if category == ScenarioCategory.BAD:
+        return ScenarioSeverity.HIGH
+    if category == ScenarioCategory.FALSE_POSITIVE:
+        return ScenarioSeverity.CRITICAL
+    if not probe.decode_ok:
+        return ScenarioSeverity.HIGH
+    return ScenarioSeverity.MEDIUM
+
+
 _ALL_PACKS: dict[str, tuple[MusicLabScenarioPack, dict[str, SyntheticFixture]]] | None = None
 
 
@@ -863,6 +1076,7 @@ def all_scenario_packs() -> dict[str, tuple[MusicLabScenarioPack, dict[str, Synt
         "sample-rate-manipulation": build_sample_rate_manipulation_pack(),
         "lowpass-and-cutoff": build_lowpass_and_cutoff_pack(),
         "false-positive-guard": build_false_positive_guard_pack(),
+        "advanced-quality": build_advanced_quality_pack(),
         "album-scenarios": build_album_scenarios_pack(),
         "edge-cases": build_edge_case_pack(),
         "source-profiles": build_source_profile_pack(),
