@@ -170,6 +170,22 @@ def build_corrupt_and_invalid_pack() -> tuple[MusicLabScenarioPack, dict[str, Sy
             ),
             "flac", "flac",
         ),
+        (
+            "container-unreadable", "Container unreadable",
+            SyntheticProbeProfile(
+                container_readable=False, probe_success=True, decode_ok=False,
+                has_audio_stream=False,
+            ),
+            "flac", "flac",
+        ),
+        (
+            "probe-timeout", "Probe timeout",
+            SyntheticProbeProfile(
+                timeout=True, probe_success=False, decode_ok=False,
+                has_audio_stream=False,
+            ),
+            "flac", "flac",
+        ),
     ]
 
     for fid, desc, probe, codec, ext in specs:
@@ -234,6 +250,22 @@ def build_transcode_pack() -> tuple[MusicLabScenarioPack, dict[str, SyntheticFix
             SyntheticProbeProfile(
                 codec="opus", sample_rate=48000, bit_depth=16,
                 format_name="opus", lowpass_suspicion=True,
+            ),
+            "flac", "flac",
+        ),
+        (
+            "lossy-source-lossless-container", "Lossy source in lossless container",
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                format_name="flac", lossy_source_lossless_container=True,
+            ),
+            "flac", "flac",
+        ),
+        (
+            "bitrate-container-incompatible", "Bitrate/container incompatible",
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                format_name="flac", bitrate_container_mismatch=True,
             ),
             "flac", "flac",
         ),
@@ -465,6 +497,24 @@ def build_false_positive_guard_pack() -> tuple[MusicLabScenarioPack, dict[str, S
                 decode_ok=True, has_audio_stream=True,
             ),
         ),
+        (
+            "fake_flac_lowpass_but_decode_ok",
+            "Fake FLAC with low-pass but decode OK - heuristic only, not bad",
+            SyntheticProbeProfile(
+                codec="flac", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                lowpass_suspicion=True,
+            ),
+        ),
+        (
+            "mp3_320_good_lowpass_like",
+            "MP3 320 with low-pass-like cutoff - heuristic only, not bad",
+            SyntheticProbeProfile(
+                codec="mp3", sample_rate=44100, bit_depth=16,
+                decode_ok=True, has_audio_stream=True,
+                spectral_cutoff_hz=16000,
+            ),
+        ),
     ]
 
     for fid, desc, probe in specs:
@@ -493,6 +543,7 @@ def build_album_scenarios_pack() -> tuple[MusicLabScenarioPack, dict[str, Synthe
     album_tracks = [f"{i:02d} Track {i}" for i in range(1, 11)]
     album_missing = [f"{i:02d} Track {i}" for i in range(1, 11) if i != 5]
     album_duplicate = [f"{i:02d} Track {i}" for i in range(1, 11)] + ["05 Track 5"]
+    album_wrong_order = ["02 Track 2", "01 Track 1"] + [f"{i:02d} Track {i}" for i in range(3, 11)]
 
     specs = [
         (
@@ -513,23 +564,64 @@ def build_album_scenarios_pack() -> tuple[MusicLabScenarioPack, dict[str, Synthe
             album_duplicate, None,
             SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16),
         ),
+        (
+            "album-ordem-errada",
+            "Album with wrong track order",
+            album_wrong_order, None,
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16),
+        ),
+        (
+            "album-mixed-formats",
+            "Album with mixed formats",
+            album_tracks, ["flac", "mp3", "m4a"],
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16),
+        ),
+        (
+            "album-um-arquivo-ruim",
+            "One bad file in otherwise good album",
+            album_tracks, None,
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=False),
+        ),
     ]
 
-    for fid, desc, tracks, _, probe in specs:
+    for fid, desc, tracks, formats, probe in specs:
+        category = (
+            ScenarioCategory.GOOD if fid == "album-completo"
+            else ScenarioCategory.BAD if fid == "album-um-arquivo-ruim"
+            else ScenarioCategory.SUSPICIOUS
+        )
         scenarios.append(
             _scenario(
-                fid, desc, ScenarioCategory.GOOD if fid == "album-completo" else ScenarioCategory.SUSPICIOUS,
+                fid, desc, category,
                 ScenarioKind.ALBUM,
                 severity=ScenarioSeverity.LOW if fid == "album-completo" else ScenarioSeverity.MEDIUM,
                 tags=["album", fid],
             )
         )
-        candidate = build_album_candidate(
-            candidate_id=fid,
-            artist="Test Artist",
-            album="Test Album",
-            tracks=tracks,
-        )
+        if formats:
+            candidate = SearchCandidate(
+                candidate_id=fid,
+                provider="fake",
+                username="flux_test_user",
+                artist="Test Artist",
+                album="Test Album",
+                directory="Test Artist/Test Album",
+                files=[
+                    CandidateFile(
+                        filename=f"{name}.{formats[index % len(formats)]}",
+                        extension=formats[index % len(formats)],
+                        size_bytes=25000000,
+                    )
+                    for index, name in enumerate(tracks)
+                ],
+            )
+        else:
+            candidate = build_album_candidate(
+                candidate_id=fid,
+                artist="Test Artist",
+                album="Test Album",
+                tracks=tracks,
+            )
         fixture = SyntheticFixture(
             fixture_id=fid,
             description=desc,
@@ -704,6 +796,58 @@ def build_edge_case_pack() -> tuple[MusicLabScenarioPack, dict[str, SyntheticFix
     return pack, fixtures
 
 
+def build_source_profile_pack() -> tuple[MusicLabScenarioPack, dict[str, SyntheticFixture]]:
+    scenarios: list[MusicLabScenario] = []
+    fixtures: dict[str, SyntheticFixture] = {}
+    source_profiles = [
+        "qobuz_like",
+        "bandcamp_like",
+        "cd_rip_like",
+        "soulseek_folder_like",
+        "youtube_rip_like",
+        "spotify_rip_like",
+        "web_rip_like",
+        "vinyl_rip_like",
+        "live_bootleg_like",
+    ]
+
+    for source_profile in source_profiles:
+        fid = f"source-{source_profile}"
+        scenarios.append(
+            _scenario(
+                fid,
+                f"Source profile {source_profile} alone must not decide quality",
+                ScenarioCategory.FALSE_POSITIVE,
+                ScenarioKind.EDGE_CASE,
+                severity=ScenarioSeverity.HIGH,
+                tags=["source-profile", source_profile],
+            )
+        )
+        fixtures[fid] = _fixture(
+            fid,
+            f"Synthetic source profile {source_profile}",
+            "Test Artist",
+            "Source Profile Track",
+            SyntheticProbeProfile(
+                codec="flac",
+                sample_rate=44100,
+                bit_depth=16,
+                decode_ok=True,
+                has_audio_stream=True,
+                metadata={"source_profile": source_profile},
+            ),
+            tags=["source-profile", source_profile],
+        )
+
+    pack = MusicLabScenarioPack(
+        pack_id="source-profiles",
+        description="Source profile scenarios. Source profile is metadata only and must not decide quality by itself.",
+        version="1",
+        scenarios=scenarios,
+    )
+    return pack, fixtures
+
+
 _ALL_PACKS: dict[str, tuple[MusicLabScenarioPack, dict[str, SyntheticFixture]]] | None = None
 
 
@@ -721,6 +865,7 @@ def all_scenario_packs() -> dict[str, tuple[MusicLabScenarioPack, dict[str, Synt
         "false-positive-guard": build_false_positive_guard_pack(),
         "album-scenarios": build_album_scenarios_pack(),
         "edge-cases": build_edge_case_pack(),
+        "source-profiles": build_source_profile_pack(),
     }
     return _ALL_PACKS
 

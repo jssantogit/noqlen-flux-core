@@ -203,7 +203,7 @@ class MusicLabScenarioRunnerService(FluxService):
             regression_flags=regression_flags,
             metadata={
                 "dry_run": dry_run,
-                "workspace": str(workspace_root),
+                "workspace_root": "[workspace-root]",
                 "network": False,
                 "downloads": False,
                 "library_writes": False,
@@ -347,6 +347,13 @@ class MusicLabScenarioRunnerService(FluxService):
                             message="Transfer plan simulated",
                         )
                     )
+                    steps.append(
+                        MusicLabScenarioStepResult(
+                            step_name="transfer-submission-fake",
+                            status="success",
+                            message="Fake transfer submission previewed; no provider submission performed",
+                        )
+                    )
                 else:
                     steps.append(
                         MusicLabScenarioStepResult(
@@ -370,6 +377,27 @@ class MusicLabScenarioRunnerService(FluxService):
                     step_name="simulate-artifact",
                     status="success",
                     message="Simulated downloaded artifact creation",
+                )
+            )
+            steps.append(
+                MusicLabScenarioStepResult(
+                    step_name="download-artifact",
+                    status="success",
+                    message="DownloadArtifact simulated inside controlled MusicLab flow",
+                )
+            )
+
+        if cfg.simulate_audio_probe:
+            steps.append(
+                MusicLabScenarioStepResult(
+                    step_name="audio-probe",
+                    status="success",
+                    message="Synthetic AudioProbe profile evaluated; no ffmpeg/ffprobe invoked",
+                    metadata={
+                        "codec": fixture.probe.codec,
+                        "sample_rate": fixture.probe.sample_rate,
+                        "bit_depth": fixture.probe.bit_depth,
+                    },
                 )
             )
 
@@ -407,7 +435,6 @@ class MusicLabScenarioRunnerService(FluxService):
                 )
 
                 if cfg.run_routing:
-                    quality_data = quality_result.summary.get("quality_result", {})
                     from noqlen_flux.quality import QualityFinding, QualityResult
                     qr = QualityResult(
                         item_id=fixture.fixture_id,
@@ -528,6 +555,8 @@ class MusicLabScenarioRunnerService(FluxService):
                 "scenario_category": scenario.category.value,
                 "scenario_kind": scenario.kind.value,
                 "dry_run": config.dry_run,
+                "source_profile": fixture.probe.metadata.get("source_profile"),
+                "fixture_tags": fixture.tags,
             },
         )
 
@@ -541,6 +570,8 @@ def _derive_expected_grade(fixture: SyntheticFixture, scenario: MusicLabScenario
         or not probe.decode_ok
         or probe.truncated
         or probe.duration_seconds <= 0
+        or not probe.container_readable
+        or probe.timeout
     )
     has_heuristic_only = (
         probe.lowpass_suspicion
@@ -550,6 +581,8 @@ def _derive_expected_grade(fixture: SyntheticFixture, scenario: MusicLabScenario
         or probe.upsampled
         or probe.downsampled
         or probe.transcode_cutoff_source is not None
+        or probe.bitrate_container_mismatch
+        or probe.lossy_source_lossless_container
     ) and not has_objective
 
     if has_objective:
@@ -568,6 +601,8 @@ def _derive_expected_routing(fixture: SyntheticFixture, scenario: MusicLabScenar
         or not probe.decode_ok
         or probe.truncated
         or probe.duration_seconds <= 0
+        or not probe.container_readable
+        or probe.timeout
     )
     has_heuristic_only = (
         probe.lowpass_suspicion
@@ -577,6 +612,8 @@ def _derive_expected_routing(fixture: SyntheticFixture, scenario: MusicLabScenar
         or probe.upsampled
         or probe.downsampled
         or probe.transcode_cutoff_source is not None
+        or probe.bitrate_container_mismatch
+        or probe.lossy_source_lossless_container
     ) and not has_objective
 
     if has_objective:
@@ -612,15 +649,28 @@ def _validate_critical_rules(
     probe = fixture.probe
     has_cutoff_only = (
         (probe.lowpass_suspicion or probe.spectral_cutoff_hz is not None)
-        and not probe.decode_ok is False
+        and probe.decode_ok
         and probe.has_audio_stream
         and probe.file_size_bytes > 0
         and probe.probe_success
         and not probe.truncated
         and probe.duration_seconds > 0
+        and probe.container_readable
+        and not probe.timeout
     )
 
     if has_cutoff_only and probe.decode_ok:
+        non_cutoff_objective_failures = [
+            code for code in objective_failures
+            if code not in {"lowpass-suspicion", "spectral-cutoff", "transcode-cutoff"}
+        ]
+        if non_cutoff_objective_failures:
+            errors.append(
+                "CRITICAL: Cutoff/lowpass-only scenario produced objective failure(s): "
+                + ", ".join(non_cutoff_objective_failures)
+            )
+            regression_notes.append("cutoff-lowpass-caused-objective-failure")
+
         if actual_grade == QualityGrade.BAD.value:
             errors.append("CRITICAL: Cutoff/lowpass alone resulted in QualityGrade bad. Must be MEDIUM at worst.")
             regression_notes.append("cutoff-lowpass-caused-bad-grade")
@@ -634,10 +684,6 @@ def _validate_critical_rules(
         if actual_staging == StagingArea.QUARANTINE.value:
             errors.append("CRITICAL: Cutoff/lowpass alone sent to quarantine. Must not quarantine for heuristic only.")
             regression_notes.append("cutoff-lowpass-caused-quarantine")
-
-        if "objective_failure" in [c.lower() for c in objective_failures]:
-            errors.append("CRITICAL: Cutoff/lowpass produced objective_failure. Must be heuristic_warning only.")
-            regression_notes.append("cutoff-lowpass-caused-objective-failure")
 
     if not probe.decode_ok and has_cutoff_only:
         if actual_grade != QualityGrade.BAD.value:

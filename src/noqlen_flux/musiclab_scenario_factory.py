@@ -37,6 +37,10 @@ class SyntheticProbeProfile:
     downsampled: bool = False
     transcode_cutoff_source: str | None = None
     truncated: bool = False
+    container_readable: bool = True
+    timeout: bool = False
+    bitrate_container_mismatch: bool = False
+    lossy_source_lossless_container: bool = False
     metadata: SafeMetadata = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,6 +69,26 @@ def build_probe_findings(probe: SyntheticProbeProfile) -> list[QualityFinding]:
             QualityFinding(
                 code="zero-byte-file",
                 message="File is zero bytes.",
+                kind=QualityFindingKind.OBJECTIVE_FAILURE,
+                severity=QualityFindingSeverity.ERROR,
+            )
+        )
+
+    if probe.timeout:
+        findings.append(
+            QualityFinding(
+                code="probe-timeout",
+                message="Audio probe timed out.",
+                kind=QualityFindingKind.OBJECTIVE_FAILURE,
+                severity=QualityFindingSeverity.ERROR,
+            )
+        )
+
+    if not probe.container_readable:
+        findings.append(
+            QualityFinding(
+                code="container-unreadable",
+                message="Container metadata could not be read.",
                 kind=QualityFindingKind.OBJECTIVE_FAILURE,
                 severity=QualityFindingSeverity.ERROR,
             )
@@ -198,6 +222,28 @@ def build_probe_findings(probe: SyntheticProbeProfile) -> list[QualityFinding]:
                 severity=QualityFindingSeverity.WARNING,
                 confidence=0.65,
                 metadata={"cutoff_source": probe.transcode_cutoff_source},
+            )
+        )
+
+    if probe.bitrate_container_mismatch:
+        findings.append(
+            QualityFinding(
+                code="bitrate-container-mismatch",
+                message="Bitrate and container signals are incompatible.",
+                kind=QualityFindingKind.HEURISTIC_WARNING,
+                severity=QualityFindingSeverity.WARNING,
+                confidence=0.65,
+            )
+        )
+
+    if probe.lossy_source_lossless_container:
+        findings.append(
+            QualityFinding(
+                code="lossy-source-lossless-container",
+                message="Signals suggest lossy source in a lossless container.",
+                kind=QualityFindingKind.HEURISTIC_WARNING,
+                severity=QualityFindingSeverity.WARNING,
+                confidence=0.65,
             )
         )
 

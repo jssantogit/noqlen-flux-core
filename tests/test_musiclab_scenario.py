@@ -255,6 +255,7 @@ class TestScenarioPacks:
         assert "false-positive-guard" in packs
         assert "album-scenarios" in packs
         assert "edge-cases" in packs
+        assert "source-profiles" in packs
 
     def test_good_formats_pack_fixtures(self) -> None:
         packs = all_scenario_packs()
@@ -266,14 +267,25 @@ class TestScenarioPacks:
     def test_corrupt_pack_fixtures(self) -> None:
         packs = all_scenario_packs()
         pack, fixtures = packs["corrupt-and-invalid"]
-        assert len(pack.scenarios) == 5
+        assert len(pack.scenarios) == 7
         assert all(s.category == ScenarioCategory.BAD for s in pack.scenarios)
 
     def test_false_positive_guard_pack_fixtures(self) -> None:
         packs = all_scenario_packs()
         pack, fixtures = packs["false-positive-guard"]
-        assert len(pack.scenarios) == 5
+        assert len(pack.scenarios) == 7
         assert all(s.category == ScenarioCategory.FALSE_POSITIVE for s in pack.scenarios)
+
+    def test_source_profile_pack_does_not_encode_quality_findings(self) -> None:
+        packs = all_scenario_packs()
+        pack, fixtures = packs["source-profiles"]
+        assert len(pack.scenarios) == 9
+        for fixture in fixtures.values():
+            findings = build_probe_findings(fixture.probe)
+            objective = [f for f in findings if f.kind == QualityFindingKind.OBJECTIVE_FAILURE]
+            heuristic = [f for f in findings if f.kind == QualityFindingKind.HEURISTIC_WARNING]
+            assert objective == []
+            assert heuristic == []
 
     def test_qobuz_like_scenario_exists(self) -> None:
         scenario = get_scenario("qobuz_like_cutoff_9_4khz_decode_ok")
@@ -320,10 +332,14 @@ class TestScenarioPacks:
             "no-audio-stream",
             "invalid-duration",
             "truncated-file",
+            "container-unreadable",
+            "probe-timeout",
             "fake-flac",
             "mp3-transcoded-to-flac",
             "aac-transcoded-to-wav",
             "opus-renamed-as-flac",
+            "lossy-source-lossless-container",
+            "bitrate-container-incompatible",
             "fake-24bit",
             "fake-96khz",
             "upsampled-44-to-96",
@@ -333,23 +349,38 @@ class TestScenarioPacks:
             "spectral_cutoff_only",
             "lowpass_with_valid_metadata",
             "lowpass_plus_decode_failure",
+            "fake_flac_lowpass_but_decode_ok",
+            "mp3_320_good_lowpass_like",
             "album-completo",
             "album-faixa-faltando",
             "album-faixa-duplicada",
+            "album-ordem-errada",
+            "album-mixed-formats",
+            "album-um-arquivo-ruim",
             "arquivo-locked",
             "usuario-offline",
             "download-incompleto",
             "candidato-errado-bom",
             "candidato-bom-metadata-ruim",
+            "source-qobuz_like",
+            "source-bandcamp_like",
+            "source-cd_rip_like",
+            "source-soulseek_folder_like",
+            "source-youtube_rip_like",
+            "source-spotify_rip_like",
+            "source-web_rip_like",
+            "source-vinyl_rip_like",
+            "source-live_bootleg_like",
         }
         missing = required - scenario_ids
         assert not missing, f"Missing scenarios: {missing}"
 
     def test_list_all_packs(self) -> None:
         packs = list_all_packs()
-        assert len(packs) == 9
+        assert len(packs) == 10
         pack_ids = {p.pack_id for p in packs}
         assert "false-positive-guard" in pack_ids
+        assert "source-profiles" in pack_ids
 
 
 class TestScenarioRunner:
@@ -434,6 +465,29 @@ class TestScenarioRunner:
         assert result.summary.get("total_scenarios", 0) > 0
         critical = result.summary.get("critical_failures", [])
         assert len(critical) == 0, f"Critical failures in false-positive-guard: {critical}"
+
+    def test_source_profile_alone_does_not_decide_quality(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="source-youtube_rip_like",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        assert result.status == Status.SUCCESS
+        assert result.summary.get("actual_grade") == "excellent"
+        assert result.summary.get("objective_failure_codes") == []
+        assert result.summary.get("heuristic_warning_codes") == []
+
+    def test_pack_report_redacts_workspace_path(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "private-user-name" / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_pack(
+            pack_id="source-profiles",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        metadata = result.summary["report"]["metadata"]
+        assert metadata["workspace_root"] == "[workspace-root]"
+        assert "private-user-name" not in str(result.summary["report"])
 
     def test_run_good_formats_pack(self, tmp_path: Path) -> None:
         workspace = str(tmp_path / "flux-workspace")
