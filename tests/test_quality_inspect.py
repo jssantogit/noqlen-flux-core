@@ -206,10 +206,11 @@ def test_quality_service_does_not_import_routing() -> None:
 
 
 def test_quality_inspect_blocks_unsafe_path(quality_service: QualityService, workspace: Path) -> None:
-    with pytest.raises(ValueError):
-        quality_service.inspect_file(
-            item_id="item-1",
-            relative_path="/etc/passwd",
-            workspace_root=str(workspace),
-            dry_run=True,
-        )
+    result = quality_service.inspect_file(
+        item_id="item-1",
+        relative_path="/etc/passwd",
+        workspace_root=str(workspace),
+        dry_run=True,
+    )
+    assert result.status == Status.FAILED
+    assert result.errors

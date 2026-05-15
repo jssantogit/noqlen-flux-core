@@ -1323,6 +1323,8 @@ def run_quality_inspect(args: argparse.Namespace) -> int:
     if available and writes report to workspace/reports.
     """
     from noqlen_flux.services.audio_probe import FakeProbeBackend, FfmpegProbeBackend
+    from noqlen_flux.config import config_from_env
+    from noqlen_flux.reports import ReportFormat
     from pathlib import Path
 
     dry_run = not getattr(args, "apply", False)
@@ -1352,6 +1354,21 @@ def run_quality_inspect(args: argparse.Namespace) -> int:
         backend=backend,
         dry_run=dry_run,
     )
+
+    if not dry_run and result.status != Status.FAILED:
+        report_result = ReportService().write_report(
+            config_from_env(workspace, dry_run=False),
+            result,
+            ReportFormat.JSON,
+        )
+        result.steps.extend(report_result.steps)
+        result.warnings.extend(report_result.warnings)
+        result.errors.extend(report_result.errors)
+        result.artifacts.extend(report_result.artifacts)
+        result.applied_changes.extend(report_result.applied_changes)
+        if report_result.status == Status.FAILED:
+            result.status = Status.FAILED
+        result.summary["report"] = report_result.summary
 
     print(_render_result(result))
     return _exit_code(result.status)

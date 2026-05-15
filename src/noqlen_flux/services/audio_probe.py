@@ -189,9 +189,11 @@ class FfmpegProbeBackend(ProbeBackend):
         self,
         *,
         ffprobe_path: str = "ffprobe",
+        ffmpeg_path: str = "ffmpeg",
         timeout_seconds: int = 30,
     ) -> None:
         self._ffprobe_path = ffprobe_path
+        self._ffmpeg_path = ffmpeg_path
         self._timeout_seconds = timeout_seconds
 
     @property
@@ -201,12 +203,17 @@ class FfmpegProbeBackend(ProbeBackend):
     def is_available(self) -> bool:
         import subprocess
         try:
-            result = subprocess.run(
+            ffprobe_result = subprocess.run(
                 [self._ffprobe_path, "-version"],
                 capture_output=True,
                 timeout=5,
             )
-            return result.returncode == 0
+            ffmpeg_result = subprocess.run(
+                [self._ffmpeg_path, "-version"],
+                capture_output=True,
+                timeout=5,
+            )
+            return ffprobe_result.returncode == 0 and ffmpeg_result.returncode == 0
         except Exception:
             return False
 
@@ -253,8 +260,10 @@ class FfmpegProbeBackend(ProbeBackend):
                 )
 
             data = json.loads(result.stdout.decode("utf-8"))
-
-            return self._parse_ffprobe_output(data, file_path, request_id, item_id)
+            parsed = self._parse_ffprobe_output(data, file_path, request_id, item_id)
+            if parsed.success and parsed.has_audio_stream:
+                self._validate_decode(file_path, parsed, effective_timeout)
+            return parsed
 
         except subprocess.TimeoutExpired:
             return AudioProbeResult(
@@ -324,6 +333,77 @@ class FfmpegProbeBackend(ProbeBackend):
                 ],
                 errors=[f"Probe exception: {str(exc)[:200]}"],
             )
+
+    def _validate_decode(
+        self,
+        file_path: Path,
+        result: AudioProbeResult,
+        timeout_seconds: int,
+    ) -> None:
+        import subprocess
+
+        try:
+            decode = subprocess.run(
+                [
+                    self._ffmpeg_path,
+                    "-v", "error",
+                    "-i", str(file_path),
+                    "-f", "null",
+                    "-",
+                ],
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            object.__setattr__(result, "success", False)
+            object.__setattr__(result, "decode_ok", False)
+            result.findings.append(
+                AudioProbeFinding(
+                    code="decode-timeout",
+                    message=f"ffmpeg decode timed out after {timeout_seconds}s.",
+                    category="objective_failure",
+                    confidence=1.0,
+                )
+            )
+            result.errors.append(f"ffmpeg decode timed out after {timeout_seconds}s")
+            return
+        except FileNotFoundError:
+            object.__setattr__(result, "success", False)
+            object.__setattr__(result, "decode_ok", False)
+            result.findings.append(
+                AudioProbeFinding(
+                    code="ffmpeg-missing",
+                    message=f"ffmpeg not found at '{self._ffmpeg_path}'. ffmpeg/ffprobe is optional and must be installed separately.",
+                    category="objective_failure",
+                    confidence=1.0,
+                )
+            )
+            result.errors.append(f"ffmpeg not found: {self._ffmpeg_path}")
+            return
+
+        if decode.returncode != 0:
+            stderr_text = decode.stderr.decode("utf-8", errors="replace").strip()
+            object.__setattr__(result, "success", False)
+            object.__setattr__(result, "decode_ok", False)
+            result.findings.append(
+                AudioProbeFinding(
+                    code="decode-failure",
+                    message=f"ffmpeg decode returned non-zero exit code: {stderr_text[:200] if stderr_text else str(decode.returncode)}",
+                    category="objective_failure",
+                    confidence=1.0,
+                )
+            )
+            result.errors.append(f"ffmpeg decode error: {stderr_text[:200] if stderr_text else 'exit code ' + str(decode.returncode)}")
+            return
+
+        result.findings.append(
+            AudioProbeFinding(
+                code="decode-ok",
+                message="Audio stream decoded successfully.",
+                category="diagnostic",
+                confidence=1.0,
+            )
+        )
 
     def _parse_ffprobe_output(
         self,

@@ -294,12 +294,20 @@ class QualityService(FluxService):
         effective_backend = backend or FakeProbeBackend()
         probe_service = AudioProbeService()
 
-        request = AudioProbeRequest(
-            request_id=f"quality-inspect-{item_id}",
-            item_id=item_id,
-            relative_path=relative_path,
-            workspace_root=workspace_root,
-        )
+        try:
+            request = AudioProbeRequest(
+                request_id=f"quality-inspect-{item_id}",
+                item_id=item_id,
+                relative_path=relative_path,
+                workspace_root=workspace_root,
+            )
+        except ValueError as exc:
+            return FluxResult(
+                operation=self.operation,
+                status=Status.FAILED,
+                errors=[self.error("unsafe-quality-path", str(exc))],
+                summary={"error": str(exc), "relative_path": relative_path},
+            ).finish()
 
         probe_result = probe_service.probe(request, effective_backend, dry_run=dry_run)
 

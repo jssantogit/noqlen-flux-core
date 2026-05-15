@@ -641,6 +641,20 @@ def _mock_subprocess_run(
     monkeypatch.setattr("subprocess.run", mock_run)
 
 
+def _mock_subprocess_run_sequence(monkeypatch: pytest.MonkeyPatch, results: list[tuple[int, str, str]]) -> None:
+    calls = list(results)
+
+    def mock_run(cmd, **kwargs):
+        returncode, stdout, stderr = calls.pop(0)
+        return type("MockResult", (), {
+            "returncode": returncode,
+            "stdout": stdout.encode("utf-8"),
+            "stderr": stderr.encode("utf-8"),
+        })()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+
 def _valid_ffprobe_json() -> str:
     import json
     return json.dumps({
@@ -723,6 +737,23 @@ def test_ffmpeg_probe_backend_decode_failure(
     assert result.success is False
     assert result.decode_ok is False
     assert any(f.code == "ffprobe-error" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_decode_failure_after_valid_metadata(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run_sequence(
+        monkeypatch,
+        [
+            (0, _valid_ffprobe_json(), ""),
+            (1, "", "Invalid data found during processing"),
+        ],
+    )
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "corrupt.flac")
+    assert result.success is False
+    assert result.decode_ok is False
+    assert any(f.code == "decode-failure" for f in result.findings)
 
 
 def test_ffmpeg_probe_backend_invalid_duration(

@@ -429,7 +429,7 @@ Simulate a fake bad quality result:
 noqlen-flux quality fake bad
 ```
 
-This is not real audio quality analysis. Flux still has no ffmpeg, transcode detection, spectrogram analysis, decode validation, clipping detection, or low-pass analysis. Real audio inspection will come in a separate future commit after MusicLab calibration establishes thresholds.
+This fake command is not real audio quality analysis. Real opt-in decode validation is available through `quality inspect --apply`, but Flux still has no transcode detection, spectrogram analysis, clipping detection, or low-pass analysis. Spectral cutoff/low-pass evidence remains weak and requires correlation with objective signals.
 
 ## Audio Probe Infrastructure
 
@@ -448,7 +448,7 @@ noqlen-flux quality inspect --workspace /tmp/workspace --path incoming/demo.wav 
 ```
 
 - `FakeProbeBackend` is used in dry-run and all tests. No real audio files required.
-- `FfmpegProbeBackend` calls `ffprobe` via `subprocess.run()` with configurable timeout. ffprobe is optional.
+- `FfmpegProbeBackend` calls `ffprobe` for metadata and `ffmpeg` for decode validation via `subprocess.run()` with configurable timeout. ffmpeg/ffprobe are optional.
 - Dry-run is the default; `--apply` requires explicit opt-in.
 - ffprobe not installed → controlled error, not a crash.
 - Path safety: absolute paths, traversal, symlink escape, and protected roots are blocked.
