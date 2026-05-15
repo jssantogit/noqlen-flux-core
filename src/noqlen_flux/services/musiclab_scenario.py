@@ -484,15 +484,91 @@ class MusicLabScenarioRunnerService(FluxService):
 
         if cfg.run_handoff:
             try:
-                manifest = self._handoff_service.demo_manifest()
+                from noqlen_flux.handoff import (
+                    HandoffCandidateRef,
+                    HandoffItem,
+                    HandoffItemStatus,
+                    HandoffItemType,
+                    HandoffPathRef,
+                    HandoffQualityRef,
+                    HandoffRoutingRef,
+                )
+
+                item_id = f"musiclab-{scenario.scenario_id}"
+                relative_path = f"incoming/fake/{fixture.fixture_id}/track.{fixture.probe.format_name}"
+                handoff_status = _map_staging_to_handoff_status(actual_staging)
+
+                handoff_item = HandoffItem(
+                    item_id=item_id,
+                    item_type=HandoffItemType.TRACK,
+                    status=HandoffItemStatus(handoff_status),
+                    path=HandoffPathRef(
+                        relative_path=relative_path,
+                        workspace_area=actual_staging,
+                        description=f"MusicLab scenario: {scenario.scenario_id}",
+                    ),
+                    forge_ready=(
+                        handoff_status == "approved"
+                        and actual_staging == "approved"
+                        and _check_scenario_handoff_ready(
+                            actual_grade, actual_routing, actual_staging,
+                            objective_failure_codes, fixture.probe.decode_ok,
+                        )
+                    ),
+                    quality=HandoffQualityRef(
+                        grade=actual_grade,
+                        finding_count=len(objective_failure_codes) + len(heuristic_warning_codes),
+                        objective_failure_count=len(objective_failure_codes),
+                        heuristic_warning_count=len(heuristic_warning_codes),
+                    ),
+                    routing=HandoffRoutingRef(
+                        outcome=actual_routing,
+                        action_type="plan_only",
+                        reason_count=1,
+                    ),
+                    candidate=HandoffCandidateRef(
+                        candidate_id=fixture.fixture_id or item_id,
+                        provider="fake",
+                        risk=fixture.probe.decode_ok and "low" or "high",
+                    ),
+                    metadata={
+                        "scenario_id": scenario.scenario_id,
+                        "scenario_category": scenario.category.value,
+                        "fixture_tags": fixture.tags,
+                    },
+                )
+
+                manifest = self._handoff_service.build_manifest(
+                    items=[handoff_item],
+                    source=None,
+                    metadata={"musiclab_scenario": scenario.scenario_id},
+                )
+
+                validation = self._handoff_service.validate_manifest(manifest)
+                handoff_valid = validation.valid
+                handoff_forge_ready = handoff_item.forge_ready
+
                 steps.append(
                     MusicLabScenarioStepResult(
                         step_name="handoff-preview",
-                        status="success",
-                        message="Handoff preview generated",
-                        metadata={"manifest_items": len(manifest.items)},
+                        status="success" if handoff_valid else "warning",
+                        message=f"Handoff manifest {'valid' if handoff_valid else 'invalid'}, forge_ready={handoff_forge_ready}, status={handoff_status}",
+                        metadata={
+                            "manifest_items": len(manifest.items),
+                            "handoff_version": manifest.handoff_version,
+                            "valid": handoff_valid,
+                            "forge_ready": handoff_forge_ready,
+                            "handoff_status": handoff_status,
+                        },
                     )
                 )
+
+                if not handoff_valid:
+                    warnings.append(
+                        f"Handoff manifest validation failed: "
+                        + "; ".join(i.message for i in validation.issues)
+                    )
+
             except Exception as exc:
                 steps.append(
                     MusicLabScenarioStepResult(
@@ -528,6 +604,13 @@ class MusicLabScenarioRunnerService(FluxService):
             errors.append("Destructive action detected (delete_eligible staging)")
             regression_notes.append("destructive-action-flag")
 
+        if cfg.run_handoff:
+            _validate_handoff_guard_rules(
+                fixture, scenario,
+                actual_grade, actual_routing, actual_staging,
+                errors, warnings, regression_notes,
+            )
+
         has_errors = len(errors) > 0
         outcome = (
             ScenarioOutcome.ERROR if "error" in [s.status for s in steps]
@@ -559,6 +642,37 @@ class MusicLabScenarioRunnerService(FluxService):
                 "fixture_tags": fixture.tags,
             },
         )
+
+
+def _map_staging_to_handoff_status(staging_area: str) -> str:
+    mapping = {
+        "approved": "approved",
+        "review": "review",
+        "quarantine": "quarantine",
+        "rejected": "rejected",
+        "delete_eligible": "delete_eligible",
+    }
+    return mapping.get(staging_area, "unknown")
+
+
+def _check_scenario_handoff_ready(
+    actual_grade: str,
+    actual_routing: str,
+    actual_staging: str,
+    objective_failure_codes: list[str],
+    decode_ok: bool,
+) -> bool:
+    if actual_staging != "approved":
+        return False
+    if actual_routing != "approved":
+        return False
+    if actual_grade in ("bad", "unknown"):
+        return False
+    if objective_failure_codes:
+        return False
+    if not decode_ok:
+        return False
+    return True
 
 
 def _derive_expected_grade(fixture: SyntheticFixture, scenario: MusicLabScenario) -> str | None:
@@ -808,6 +922,85 @@ def has_objective_failure(fixture: SyntheticFixture) -> bool:
         or not probe.container_readable
         or probe.timeout
     )
+
+
+def _validate_handoff_guard_rules(
+    fixture: SyntheticFixture,
+    scenario: MusicLabScenario,
+    actual_grade: str,
+    actual_routing: str,
+    actual_staging: str,
+    errors: list[str],
+    warnings: list[str],
+    regression_notes: list[str],
+) -> None:
+    from noqlen_flux.musiclab_scenario import ScenarioCategory
+
+    category = scenario.category
+    probe = fixture.probe
+
+    if category == ScenarioCategory.GOOD and actual_staging == "approved":
+        if actual_grade == "bad":
+            errors.append(
+                "CRITICAL: Good-category scenario with approved staging has bad grade. "
+                "Handoff should be blocked."
+            )
+            regression_notes.append("good-category-bad-grade-handoff-blocked")
+
+    if (
+        category in (ScenarioCategory.BAD, ScenarioCategory.SUSPICIOUS)
+        and actual_staging == "approved"
+        and not has_objective_failure(fixture)
+    ):
+        warnings.append(
+            "Warning: Bad/suspicious scenario with no objective failure "
+            "has approved staging. Verify it is still review-eligible."
+        )
+
+    if category == ScenarioCategory.BAD or has_objective_failure(fixture):
+        if actual_staging not in ("rejected", "quarantine", "review"):
+            warnings.append(
+                "Handoff guard: corrupt/decode_failure scenario not in rejected/quarantine. "
+                "Handoff should not be approved for bad scenarios."
+            )
+        if actual_routing == "approved":
+            warnings.append(
+                "Handoff guard: bad scenario routed to approved. "
+                "Review needed before handoff."
+            )
+
+    if not probe.decode_ok:
+        if actual_staging == "approved":
+            errors.append(
+                "CRITICAL: decode_failure scenario has approved staging. "
+                "Corrupt/decode failure must not produce approved handoff."
+            )
+            regression_notes.append("decode-failure-approved-handoff")
+
+    if actual_staging in ("rejected", "delete_eligible"):
+        if actual_routing == "approved":
+            errors.append(
+                "CRITICAL: rejected/delete_eligible staging but approved routing. "
+                "Handoff guard inconsistency."
+            )
+            regression_notes.append("rejected-staging-approved-routing-handoff-guard")
+
+    if (
+        scenario.scenario_id == "qobuz_like_cutoff_9_4khz_decode_ok"
+        and probe.decode_ok
+    ):
+        if actual_staging in ("quarantine", "rejected", "delete_eligible"):
+            errors.append(
+                "CRITICAL: Qobuz-like cutoff with decode_ok sent to blocked staging. "
+                "Handoff should be available for this scenario."
+            )
+            regression_notes.append("qobuz-like-handoff-blocked")
+
+    if actual_staging == "delete_eligible":
+        errors.append(
+            "CRITICAL: delete_eligible staging cannot be handed off to Forge."
+        )
+        regression_notes.append("delete-eligible-handoff-guard")
 
 
 def _derive_grade_from_findings(

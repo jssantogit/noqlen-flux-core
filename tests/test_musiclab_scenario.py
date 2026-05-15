@@ -603,3 +603,85 @@ class TestScenarioRunner:
                 f"{scenario_id}: good scenario must not be delete_eligible"
             assert result.summary.get("destructive_action_detected") is False, \
                 f"{scenario_id}: good scenario must not have destructive actions"
+
+    def test_handoff_guard_for_good_scenario(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="flac-16-44-good",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        handoff_step = _find_step(result, "handoff-preview")
+        if handoff_step:
+            meta = handoff_step.get("metadata", {})
+            assert meta.get("forge_ready") is True, \
+                "Good FLAC 16-44 scenario should be forge_ready"
+            assert meta.get("valid") is True
+
+    def test_handoff_guard_blocks_corrupt_scenario(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="corrupt-file",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        handoff_step = _find_step(result, "handoff-preview")
+        if handoff_step:
+            meta = handoff_step.get("metadata", {})
+            assert meta.get("forge_ready") is False, \
+                "Corrupt file scenario must NOT be forge_ready"
+
+    def test_handoff_guard_blocks_decode_failure(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        for scenario_id in ("corrupt-file", "zero-byte", "truncated-file"):
+            result = MusicLabScenarioRunnerService().run_scenario(
+                scenario_id=scenario_id,
+                workspace_root=workspace,
+                dry_run=True,
+            )
+            handoff_step = _find_step(result, "handoff-preview")
+            if handoff_step:
+                meta = handoff_step.get("metadata", {})
+                assert meta.get("forge_ready") is False, \
+                    f"{scenario_id}: decode_failure must not be forge_ready"
+
+    def test_handoff_guard_for_qobuz_like_cutoff(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="qobuz_like_cutoff_9_4khz_decode_ok",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        actual_staging = result.summary.get("actual_staging_area")
+        handoff_step = _find_step(result, "handoff-preview")
+        if handoff_step:
+            meta = handoff_step.get("metadata", {})
+            handoff_status = meta.get("handoff_status")
+            assert handoff_status not in ("rejected", "delete_eligible", "quarantine"), \
+                f"Qobuz-like cutoff must not be {handoff_status} for handoff"
+            assert actual_staging not in ("rejected", "delete_eligible", "quarantine"), \
+                f"Qobuz-like cutoff must not be {actual_staging}"
+
+    def test_handoff_guard_for_lowpass_suspicion_only(self, tmp_path: Path) -> None:
+        workspace = str(tmp_path / "flux-workspace")
+        result = MusicLabScenarioRunnerService().run_scenario(
+            scenario_id="lowpass_suspicion_only",
+            workspace_root=workspace,
+            dry_run=True,
+        )
+        actual_staging = result.summary.get("actual_staging_area")
+        handoff_step = _find_step(result, "handoff-preview")
+        if handoff_step:
+            meta = handoff_step.get("metadata", {})
+            assert actual_staging != "delete_eligible", \
+                "Lowpass suspicion must not be delete_eligible for handoff"
+            assert meta.get("handoff_status") != "delete_eligible"
+
+
+def _find_step(result, step_name: str) -> dict | None:
+    scenario_result = result.summary.get("scenario_result", {})
+    steps = scenario_result.get("steps", [])
+    for step in steps:
+        if step.get("step_name") == step_name:
+            return step
+    return None
