@@ -42,6 +42,7 @@ from noqlen_flux.services.search import SearchService
 from noqlen_flux.services.staging import StagingPlanService
 from noqlen_flux.services.staging_execution import StagingExecutionService
 from noqlen_flux.services.transfers import TransferPlanningService
+from noqlen_flux.services.transfer_execution import TransferExecutionService
 from noqlen_flux.staging import StagingPlan
 from noqlen_flux.transfers import TransferPriority
 
@@ -582,3 +583,46 @@ def test_quality_service_does_not_decide_routing_automatically(tmp_path: Path) -
 
     assert decision.outcome in (RoutingOutcome.REJECTED, RoutingOutcome.REVIEW)
     assert decision.action_type.value == "plan_only"
+
+
+def test_search_service_does_not_execute_provider() -> None:
+    from noqlen_flux.services import search as search_mod
+    source = open(search_mod.__file__).read()
+    assert "slskd" not in source
+
+
+def test_download_planning_service_does_not_execute_provider() -> None:
+    from noqlen_flux.services import downloads as downloads_mod
+    source = open(downloads_mod.__file__).read()
+    assert "slskd" not in source
+
+
+def test_transfer_planning_service_does_not_execute_provider() -> None:
+    from noqlen_flux.services import transfers as transfers_mod
+    source = open(transfers_mod.__file__).read()
+    assert "slskd" not in source
+
+
+def test_transfer_execution_service_does_not_import_slskd() -> None:
+    from noqlen_flux.services import transfer_execution as mod
+    assert "slskd" not in mod.__file__
+    for name in dir(mod):
+        obj = getattr(mod, name, None)
+        if hasattr(obj, "__module__"):
+            assert "slskd" not in (getattr(obj, "__module__", "") or "")
+
+
+def test_no_central_service_imports_slskd_provider() -> None:
+    service_modules = [
+        "noqlen_flux.services.search",
+        "noqlen_flux.services.downloads",
+        "noqlen_flux.services.transfers",
+        "noqlen_flux.services.transfer_execution",
+    ]
+    for mod_name in service_modules:
+        import importlib
+        mod = importlib.import_module(mod_name)
+        for attr_name in dir(mod):
+            obj = getattr(mod, attr_name, None)
+            if hasattr(obj, "__module__"):
+                assert "slskd" not in (getattr(obj, "__module__", "") or "").lower()

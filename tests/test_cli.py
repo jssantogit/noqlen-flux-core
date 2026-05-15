@@ -1911,3 +1911,32 @@ def test_transfer_plan_slskd_track_mocked_priority_high(capsys, monkeypatch) -> 
 
     output = capsys.readouterr().out
     assert "transfer-planning: success" in output
+
+
+def test_transfer_execute_fake_dry_run_works(capsys) -> None:
+    assert main(["transfer", "execute", "fake", "--artist", "Example Artist", "--title", "Example Track", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+    assert "planned" in output.lower()
+
+
+def test_transfer_execute_fake_apply_works(capsys) -> None:
+    assert main(["transfer", "execute", "fake", "--artist", "Example Artist", "--title", "Example Track", "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+
+
+def test_transfer_execute_fake_with_score_works(capsys) -> None:
+    assert main(["transfer", "execute", "fake", "--artist", "Example Artist", "--title", "Example Track", "--score", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+
+
+def test_transfer_execute_fake_no_candidates(capsys) -> None:
+    assert main(["transfer", "execute", "fake", "--artist", "Nonexistent Artist", "--title", "Nonexistent Track", "--dry-run"]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output or "no candidates" in output.lower()

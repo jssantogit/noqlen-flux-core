@@ -37,6 +37,22 @@ class TransferPriority(StrEnum):
     HIGH = "high"
 
 
+class TransferExecutionMode(StrEnum):
+    DRY_RUN = "dry-run"
+    APPLY = "apply"
+
+
+class TransferSubmissionState(StrEnum):
+    PLANNED = "planned"
+    SUBMITTED = "submitted"
+    SUCCESS = "success"
+    BLOCKED = "blocked"
+    PROVIDER_ERROR = "provider-error"
+    LOCKED_ITEM = "locked-item"
+    DUPLICATE = "duplicate"
+    UNAVAILABLE = "unavailable"
+
+
 @dataclass(slots=True, frozen=True)
 class TransferItem:
     item_id: str
@@ -195,3 +211,82 @@ class TransferArtifact:
 
     def to_dict(self) -> dict[str, Any]:
         return _clean(asdict(self))
+
+
+@dataclass(slots=True, frozen=True)
+class TransferExecutionPolicy:
+    allow_provider_queue: bool = False
+    allow_locked: bool = False
+    max_items: int | None = None
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.max_items is not None and self.max_items < 1:
+            raise ValueError("max_items must be >= 1")
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+@dataclass(slots=True, frozen=True)
+class TransferExecutionRequest:
+    request_id: str
+    queue_plan: QueuePlan
+    policy: TransferExecutionPolicy
+    mode: TransferExecutionMode = TransferExecutionMode.DRY_RUN
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.request_id.strip():
+            raise ValueError("request_id is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["mode"] = self.mode.value
+        data["queue_plan"] = self.queue_plan.to_dict()
+        data["policy"] = self.policy.to_dict()
+        return _clean(data)
+
+
+@dataclass(slots=True, frozen=True)
+class TransferSubmissionItem:
+    queue_item_id: str
+    state: TransferSubmissionState
+    message: str = ""
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.queue_item_id.strip():
+            raise ValueError("queue_item_id is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["state"] = self.state.value
+        return _clean(data)
+
+
+@dataclass(slots=True, frozen=True)
+class TransferSubmissionResult:
+    submission_id: str
+    request_id: str
+    state: TransferSubmissionState
+    items: list[TransferSubmissionItem] = field(default_factory=list)
+    blocked: bool = False
+    block_reasons: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.submission_id.strip():
+            raise ValueError("submission_id is required")
+        if not self.request_id.strip():
+            raise ValueError("request_id is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["state"] = self.state.value
+        data["items"] = [item.to_dict() for item in self.items]
+        return _clean(data)

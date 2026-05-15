@@ -17,6 +17,7 @@ from .scoring import CandidateScoringService
 from .search import SearchService
 from .staging import StagingPlanService
 from .staging_execution import StagingExecutionService
+from .transfer_execution import TransferExecutionService
 from .transfers import TransferPlanningService
 from .workspace import WorkspaceService
 
@@ -38,6 +39,7 @@ __all__ = [
     "SearchService",
     "StagingExecutionService",
     "StagingPlanService",
+    "TransferExecutionService",
     "TransferPlanningService",
     "WorkspaceService",
 ]

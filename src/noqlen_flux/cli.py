@@ -8,14 +8,15 @@ from . import __version__
 from .config import config_from_env
 from .downloads import DownloadConstraint, DownloadIntent, DownloadRequest
 from .providers.fake import FakeSearchProvider
+from .providers.fake_queue_execution import FakeQueueExecutionProvider
 from .providers.fake_transfer import FakeTransferProvider
 from .providers.status import ProviderAvailability, ProviderKind
 from .reports import ReportFormat
 from .results import FluxError, FluxResult, Status
 from .scoring import CandidateScore
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferPlanningService, WorkspaceService
-from .transfers import TransferPriority
+from .services import CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
+from .transfers import TransferExecutionMode, TransferPriority
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -280,6 +281,19 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_plan_slskd_album.add_argument("--allowed-extension", action="append", help="Allowed file extension (repeatable)")
     transfer_plan_slskd_album.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
     transfer_plan_slskd_album.set_defaults(func=run_transfer_plan_slskd_album)
+
+    transfer_execute = transfer_subparsers.add_parser("execute", help="Execute a planned transfer queue via provider")
+    transfer_execute_subparsers = transfer_execute.add_subparsers(dest="transfer_execute_provider")
+
+    transfer_execute_fake = transfer_execute_subparsers.add_parser("fake", help="Execute a fake transfer queue")
+    transfer_execute_fake.add_argument("--artist", required=True, help="Artist name")
+    transfer_execute_fake.add_argument("--title", required=True, help="Track title")
+    transfer_execute_fake.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    transfer_execute_fake.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
+    transfer_execute_mode = transfer_execute_fake.add_mutually_exclusive_group()
+    transfer_execute_mode.add_argument("--dry-run", action="store_true", help="Plan execution without submitting")
+    transfer_execute_mode.add_argument("--apply", action="store_true", help="Submit to fake provider (in-memory)")
+    transfer_execute_fake.set_defaults(func=run_transfer_execute_fake)
 
     provider = subparsers.add_parser("provider", help="Inspect provider health and capabilities")
     provider_subparsers = provider.add_subparsers(dest="provider_command")
@@ -926,6 +940,56 @@ def run_transfer_plan_slskd_album(args: argparse.Namespace) -> int:
     return _exit_code(transfer_result.status)
 
 
+def run_transfer_execute_fake(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+    provider = _demo_fake_provider()
+    provider_result = provider.search(query)
+    if not provider_result.candidates:
+        result = TransferExecutionService().result(
+            status=Status.FAILED,
+            error="no candidates found",
+        )
+        print(_render_result(result))
+        return 1
+    candidate = provider_result.candidates[0]
+    score = None
+    if args.score:
+        score = CandidateScoringService().score_candidate(query, candidate)
+    download_request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{args.artist} - {args.title}",
+        score=score,
+    )
+    download_plan_result = DownloadPlanningService().plan_download(download_request)
+    if download_plan_result.status == Status.FAILED:
+        print(_render_result(download_plan_result))
+        return 1
+    download_plan = _extract_download_plan(download_plan_result)
+    priority = TransferPriority(args.priority)
+    queue_plan_result = TransferPlanningService().plan_queue(download_plan, priority=priority)
+    if queue_plan_result.status == Status.FAILED:
+        print(_render_result(queue_plan_result))
+        return 1
+    queue_plan = _extract_queue_plan(queue_plan_result)
+
+    mode = TransferExecutionMode.DRY_RUN
+    if getattr(args, "apply", False):
+        mode = TransferExecutionMode.APPLY
+
+    allow_provider_queue = mode == TransferExecutionMode.APPLY
+    exec_service = TransferExecutionService()
+    request = exec_service.build_execution_request(
+        queue_plan=queue_plan,
+        mode=mode,
+        allow_provider_queue=allow_provider_queue,
+    )
+    fake_exec_provider = FakeQueueExecutionProvider()
+    result = exec_service.execute_queue(request, fake_exec_provider)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def run_provider_inspect(args: argparse.Namespace) -> int:
     provider = _resolve_provider(args.provider_kind)
     result = ProviderService().inspect_provider(provider)
@@ -1273,6 +1337,37 @@ def _extract_download_plan(result: FluxResult):
         warnings=summary.get("warnings", []),
         blocked=summary.get("blocked", False),
         block_reasons=summary.get("block_reasons", []),
+    )
+
+
+def _extract_queue_plan(result: FluxResult):
+    from noqlen_flux.transfers import QueueItem, QueuePlan, QueueState, TransferItem, TransferState
+
+    summary = result.summary
+    items = []
+    for change in result.planned_changes:
+        transfer_item = TransferItem(
+            item_id=change.metadata.get("transfer_item_id", ""),
+            plan_id=summary.get("plan_id", summary.get("queue_id", "")),
+            candidate_id=summary.get("candidate_id", ""),
+            filename=change.metadata.get("filename", ""),
+            target_relative_path=change.target,
+        )
+        items.append(
+            QueueItem(
+                queue_item_id=change.metadata.get("queue_item_id", ""),
+                transfer_item=transfer_item,
+                state=TransferState.PLANNED,
+            )
+        )
+    return QueuePlan(
+        queue_id=summary.get("queue_id", ""),
+        request_id=summary.get("request_id", ""),
+        state=QueueState(summary.get("state", "ready")),
+        items=items,
+        blocked=summary.get("blocked", False),
+        block_reasons=summary.get("block_reasons", []),
+        warnings=summary.get("warnings", []),
     )
 
 
