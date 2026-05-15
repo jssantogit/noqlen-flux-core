@@ -125,6 +125,36 @@ noqlen-flux musiclab scoring run
 
 The calibration evaluates good, suspicious, bad, and false-positive cases against the default scoring profile and returns a structured report with pass/fail counts. This is fake/lab only and does not alter thresholds, profiles, or decide routing/download/staging/delete.
 
+### MusicLab Score Baselines
+
+Score baselines provide versioned, tolerance-aware regression detection across 7 packs (46 baselines). Baselines verify that `CandidateScoringService` produces expected scores, risks, and penalty codes for specific scenarios.
+
+List all score baseline packs:
+
+```bash
+noqlen-flux musiclab scoring baseline list
+```
+
+Run a specific score baseline pack (e.g., false-positive guards):
+
+```bash
+noqlen-flux musiclab scoring baseline run --pack scoring-false-positive-guards --workspace /tmp/workspace --dry-run
+```
+
+Run good candidates pack:
+
+```bash
+noqlen-flux musiclab scoring baseline run --pack scoring-good-candidates --workspace /tmp/workspace --dry-run
+```
+
+Run all score baseline packs:
+
+```bash
+noqlen-flux musiclab scoring baseline run-all --workspace /tmp/workspace --dry-run
+```
+
+Score baselines detect regression but never alter thresholds automatically. Reports are structured JSON with no secrets, no raw provider payload, no lyrics, no raw fingerprints. CandidateRisk stays separated from QualityGrade.
+
 ### MusicLab Quality Calibration
 
 MusicLab includes a quality calibration layer to verify that `QualityService` classifies quality results correctly before real audio analysis is active. The calibration uses fake findings only — no network, no download, no real music library, no ffmpeg, no audio reading.

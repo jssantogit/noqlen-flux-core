@@ -500,6 +500,52 @@ MusicLab scoring calibration exists to evaluate `CandidateRisk` before real prov
 
 The calibration does not download, route, stage, delete, or evaluate audio quality. It helps calibrate scoring profiles before real provider usage. The default dataset includes good candidates, suspicious-but-not-auto-bad candidates, clearly bad candidates, and false-positive guards (e.g., "alive" must not trigger "live" detection).
 
+### MusicLab Score Baselines and Regression Detection
+
+MusicLab score baselines provide versioned, tolerance-aware calibration for scoring regression detection. Each baseline defines the expected scoring behavior for a specific scenario.
+
+Models:
+
+- `MusicLabScoreBaseline` — per-scenario baseline with `MusicLabScoreExpectation` and `MusicLabScoreTolerance`. Includes `profile_version` for tracking.
+- `MusicLabScoreBaselinePack` — versioned collection of baselines grouped by category.
+- `MusicLabScoreBaselineResult` — per-baseline result: passed/failed, actual vs expected score, risk, confidence, score_drift, forbidden codes detected.
+- `MusicLabScoreCalibrationReport` — aggregate report with total/ passed/failed, score_drift_avg/max, risk_mismatch_count, confidence_out_of_range_count, threshold_pressure_notes, suggested_review_notes.
+
+Seven regression packs (46 baselines total):
+
+| Pack | Baselines | Purpose |
+|------|-----------|---------|
+| `scoring-good-candidates` | 6 | Good candidates score high, low risk |
+| `scoring-bad-candidates` | 6 | Bad candidates score low, high risk |
+| `scoring-false-positive-guards` | 9 | Prevent false-positive term penalties |
+| `scoring-provider-anomalies` | 7 | Locked, offline, suspicious extensions |
+| `scoring-quality-aware-preview` | 6 | Quality hints inform but don't dominate |
+| `scoring-album-integrity` | 5 | Album structural anomalies |
+| `scoring-source-profiles` | 7 | Source profiles don't bias score |
+
+Critical invariants enforced by baselines:
+
+- Source profile alone does not drop score aggressively.
+- Lowpass/cutoff alone does not trigger `high` risk.
+- Locked penalizes availability, does not turn into `bad` quality.
+- Bad metadata reduces confidence, does not prove bad file.
+- Fake/transcode probable generates warning, not destructive action.
+- Qobuz-like cutoff with decode OK does not trigger `high` risk.
+- CandidateRisk stays separated from QualityGrade.
+- Score baselines detect regression; they never alter thresholds automatically.
+- Reports suggest human review; they never auto-train or auto-adjust.
+
+CLI:
+
+```bash
+noqlen-flux musiclab scoring baseline list
+noqlen-flux musiclab scoring baseline run --pack scoring-false-positive-guards --workspace PATH --dry-run
+noqlen-flux musiclab scoring baseline run --pack scoring-good-candidates --workspace PATH --dry-run
+noqlen-flux musiclab scoring baseline run-all --workspace PATH --dry-run
+```
+
+`MusicLabScoreBaselineRunnerService` composes `CandidateScoringService` and evaluates each baseline against actual scoring output. Reports are structured JSON with no secrets, no raw provider payload, no lyrics, no raw fingerprints, no personal paths.
+
 ### MusicLab Quality Calibration
 
 MusicLab quality calibration exists to evaluate `QualityResult` and `QualityGrade` before real audio analysis is active. It uses fake findings and Flux-owned models to verify that `QualityService` classifies excellent, medium, bad, and unknown cases correctly, separating objective failures from heuristic warnings.

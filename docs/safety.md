@@ -93,6 +93,21 @@ Suspicious terms produce risk and warnings, not quality, routing, or delete deci
 
 False-positive tests are required for suspicious-term matching. Terms like "alive", "olive", "premix", and "delivery" must not trigger false suspicious-term penalties when they appear as exact words in candidate metadata.
 
+### MusicLab Score Baselines
+
+Score baselines provide versioned, tolerance-aware regression detection for scoring. Safety guarantees:
+
+- **No threshold alteration**: Baselines detect regression and suggest review; they never auto-adjust weights or thresholds.
+- **No training**: Calibration reports are evidence for human review, not automated model updates.
+- **No real providers**: All baseline evaluation uses fake candidates in memory. No network, no slskd, no real providers.
+- **No file writes**: Score baseline reports are in-memory only. No filesystem access outside workspace.
+- **No destructive actions**: Score baselines evaluate `CandidateScore` only. They do not route, stage, delete, or handoff.
+- **No secrets in reports**: Reports use safe serialization with redacted metadata.
+- **CandidateRisk vs QualityGrade separation strictly enforced**: Score pre-download is separate from quality post-download.
+- **Forbidden code detection**: Baselines detect unexpected penalties (e.g., source-profile-suspicious, lowpass-quality-penalty) and flag them as forbidden.
+
+Score baseline packs cover: good candidates, bad candidates, false-positive guards, provider anomalies, quality-aware preview, album integrity, and source profiles.
+
 ### MusicLab Quality Calibration
 
 Quality calibration fixtures must not use real music library paths. All findings are fake and constructed in memory.
