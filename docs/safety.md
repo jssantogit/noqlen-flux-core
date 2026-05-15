@@ -152,6 +152,22 @@ The `download plan slskd` CLI commands transform slskd search results into downl
 - `DownloadPlanningService` does not know about slskd; it operates on Flux `SearchCandidate` and `DownloadRequest` models only.
 - Output must not contain raw provider payloads, API keys, tokens, headers, or personal absolute paths.
 
+### Slskd Transfer Planning CLI
+
+The `transfer plan slskd` CLI commands transform slskd search results into download plans and then into queue/transfer plans without executing any transfer.
+
+- slskd transfer planning CLI is offline/no-network by default.
+- Real network search requires explicit `--allow-network`.
+- Transfer planning never downloads files.
+- Transfer planning never enqueues real provider tasks.
+- Transfer planning never writes files.
+- Transfer planning never initiates real transfers.
+- API key should come from environment variable via `--api-key-env`, never as a literal argument.
+- Tests must use offline/fake clients; no real network access in automated tests.
+- `DownloadPlanningService` does not know about slskd; it operates on Flux models only.
+- `TransferPlanningService` does not know about slskd; it operates on Flux `DownloadPlan` models only.
+- Output must not contain raw provider payloads, API keys, tokens, headers, or personal absolute paths.
+
 ## Search Providers
 
 Automated search tests must use fake providers or controlled fixtures. Real network access, real `slskd`, native Soulseek sessions, credentials, live provider APIs, and real downloads are prohibited in automated search tests.

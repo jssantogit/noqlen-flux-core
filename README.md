@@ -228,6 +228,32 @@ Real download, queue, and transfer are not implemented yet. The slskd adapter is
 
 There is no real download, no queue, no transfer, no `slskd`, and no filesystem write beyond the workspace safety boundary. Real execution will come in a separate future commit.
 
+### Slskd Search-to-Transfer Plan Preview
+
+The CLI can transform slskd search results into download plans and then into queue/transfer plans. This is a preview only — no download, queue, or transfer is executed. Network access is disabled by default; `--allow-network` is required for real search.
+
+Plan a track transfer from slskd search (offline by default):
+
+```bash
+noqlen-flux transfer plan slskd track --artist "Example Artist" --title "Example Track" --offline
+```
+
+Plan an album transfer from slskd search:
+
+```bash
+noqlen-flux transfer plan slskd album --artist "Example Artist" --album "Example Album" --offline
+```
+
+Real network search requires explicit opt-in:
+
+```bash
+noqlen-flux transfer plan slskd track --artist "Artist" --title "Track" --url http://localhost:5000 --api-key-env SLSKD_API_KEY --allow-network
+```
+
+Planning options include `--score`, `--candidate-index`, `--score-min`, `--max-files`, `--max-total-bytes`, `--allow-locked`, `--allowed-extension`, and `--priority`. These affect only the plan, never execution.
+
+Real download, queue, and transfer are not implemented yet. The slskd adapter is isolated and replaceable by a future `NativeSoulseekProvider`.
+
 ## Transfer And Queue Planning Foundation
 
 Transfer and queue planning transforms download plans into structured queue plans without executing any transfer. Queue plans are inherently dry-run and use `PlannedChange` objects, not `AppliedChange`.

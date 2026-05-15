@@ -240,6 +240,47 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_plan_fake_album.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
     transfer_plan_fake_album.set_defaults(func=run_transfer_plan_fake_album)
 
+    transfer_plan_slskd = transfer_plan_subparsers.add_parser("slskd", help="Plan a transfer from slskd search results (offline by default)")
+    transfer_plan_slskd_subparsers = transfer_plan_slskd.add_subparsers(dest="transfer_plan_kind")
+
+    transfer_plan_slskd_track = transfer_plan_slskd_subparsers.add_parser("track", help="Plan a slskd track transfer")
+    transfer_plan_slskd_track.add_argument("--artist", required=True, help="Artist name")
+    transfer_plan_slskd_track.add_argument("--title", required=True, help="Track title")
+    transfer_plan_slskd_track.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    transfer_plan_slskd_track.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    transfer_plan_slskd_track.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    transfer_plan_slskd_track.add_argument("--allow-network", action="store_true", help="Allow network access for real search")
+    transfer_plan_slskd_track.add_argument("--timeout", type=int, help="HTTP timeout in seconds (default 5)")
+    transfer_plan_slskd_track.add_argument("--max-polls", type=int, help="Maximum poll attempts (default 10)")
+    transfer_plan_slskd_track.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    transfer_plan_slskd_track.add_argument("--candidate-index", type=int, default=0, help="Select candidate by index (default 0)")
+    transfer_plan_slskd_track.add_argument("--score-min", type=float, help="Minimum score required to plan")
+    transfer_plan_slskd_track.add_argument("--max-files", type=int, help="Maximum files allowed")
+    transfer_plan_slskd_track.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
+    transfer_plan_slskd_track.add_argument("--allow-locked", action="store_true", help="Allow locked files")
+    transfer_plan_slskd_track.add_argument("--allowed-extension", action="append", help="Allowed file extension (repeatable)")
+    transfer_plan_slskd_track.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
+    transfer_plan_slskd_track.set_defaults(func=run_transfer_plan_slskd_track)
+
+    transfer_plan_slskd_album = transfer_plan_slskd_subparsers.add_parser("album", help="Plan a slskd album transfer")
+    transfer_plan_slskd_album.add_argument("--artist", required=True, help="Artist name")
+    transfer_plan_slskd_album.add_argument("--album", required=True, help="Album title")
+    transfer_plan_slskd_album.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    transfer_plan_slskd_album.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    transfer_plan_slskd_album.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    transfer_plan_slskd_album.add_argument("--allow-network", action="store_true", help="Allow network access for real search")
+    transfer_plan_slskd_album.add_argument("--timeout", type=int, help="HTTP timeout in seconds (default 5)")
+    transfer_plan_slskd_album.add_argument("--max-polls", type=int, help="Maximum poll attempts (default 10)")
+    transfer_plan_slskd_album.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    transfer_plan_slskd_album.add_argument("--candidate-index", type=int, default=0, help="Select candidate by index (default 0)")
+    transfer_plan_slskd_album.add_argument("--score-min", type=float, help="Minimum score required to plan")
+    transfer_plan_slskd_album.add_argument("--max-files", type=int, help="Maximum files allowed")
+    transfer_plan_slskd_album.add_argument("--max-total-bytes", type=int, help="Maximum total bytes allowed")
+    transfer_plan_slskd_album.add_argument("--allow-locked", action="store_true", help="Allow locked files")
+    transfer_plan_slskd_album.add_argument("--allowed-extension", action="append", help="Allowed file extension (repeatable)")
+    transfer_plan_slskd_album.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
+    transfer_plan_slskd_album.set_defaults(func=run_transfer_plan_slskd_album)
+
     provider = subparsers.add_parser("provider", help="Inspect provider health and capabilities")
     provider_subparsers = provider.add_subparsers(dest="provider_command")
 
@@ -761,6 +802,128 @@ def run_transfer_plan_fake_album(args: argparse.Namespace) -> int:
     result = TransferPlanningService().plan_queue(download_plan, priority=priority)
     print(_render_result(result))
     return _exit_code(result.status)
+
+
+def run_transfer_plan_slskd_track(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+    provider = _resolve_slskd_provider(args)
+    search_result = SearchService().search(query, provider, _scoring_service(args))
+    if search_result.status == Status.FAILED:
+        print(_render_result(search_result))
+        return 1
+    candidates = search_result.summary.get("candidates", [])
+    if not candidates:
+        print(_render_result(search_result))
+        print(_render_result(FluxResult(
+            operation="transfer-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="no-candidates", message="no candidates found from slskd search")],
+        )))
+        return 1
+    candidate_index = getattr(args, "candidate_index", 0) or 0
+    if candidate_index < 0 or candidate_index >= len(candidates):
+        print(_render_result(FluxResult(
+            operation="transfer-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="candidate-index-out-of-range", message=f"candidate index {candidate_index} out of range (0-{len(candidates) - 1})")],
+        )))
+        return 1
+    candidate_data = candidates[candidate_index]
+    candidate = _candidate_from_dict(candidate_data)
+    score = None
+    if args.score:
+        scores = search_result.summary.get("scores", [])
+        if candidate_index < len(scores):
+            score = _score_from_dict(scores[candidate_index])
+    allowed_ext = getattr(args, "allowed_extension", None) or None
+    allowed_extensions = set(allowed_ext) if allowed_ext else None
+    constraints = DownloadConstraint(
+        allow_locked=getattr(args, "allow_locked", False),
+        require_score_min=getattr(args, "score_min", None),
+        max_files=getattr(args, "max_files", None),
+        max_total_bytes=getattr(args, "max_total_bytes", None),
+        allowed_extensions=allowed_extensions,
+    )
+    download_request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{args.artist} - {args.title}",
+        score=score,
+        constraints=constraints,
+    )
+    download_plan_result = DownloadPlanningService().plan_download(download_request)
+    if download_plan_result.status == Status.FAILED:
+        print(_render_result(search_result))
+        print(_render_result(download_plan_result))
+        return 1
+    download_plan = _extract_download_plan(download_plan_result)
+    priority = TransferPriority(args.priority)
+    transfer_result = TransferPlanningService().plan_queue(download_plan, priority=priority)
+    print(_render_result(search_result))
+    print(_render_result(download_plan_result))
+    print(_render_result(transfer_result))
+    return _exit_code(transfer_result.status)
+
+
+def run_transfer_plan_slskd_album(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album)
+    provider = _resolve_slskd_provider(args)
+    search_result = SearchService().search(query, provider, _scoring_service(args))
+    if search_result.status == Status.FAILED:
+        print(_render_result(search_result))
+        return 1
+    candidates = search_result.summary.get("candidates", [])
+    if not candidates:
+        print(_render_result(search_result))
+        print(_render_result(FluxResult(
+            operation="transfer-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="no-candidates", message="no candidates found from slskd search")],
+        )))
+        return 1
+    candidate_index = getattr(args, "candidate_index", 0) or 0
+    if candidate_index < 0 or candidate_index >= len(candidates):
+        print(_render_result(FluxResult(
+            operation="transfer-planning",
+            status=Status.FAILED,
+            errors=[FluxError(code="candidate-index-out-of-range", message=f"candidate index {candidate_index} out of range (0-{len(candidates) - 1})")],
+        )))
+        return 1
+    candidate_data = candidates[candidate_index]
+    candidate = _candidate_from_dict(candidate_data)
+    score = None
+    if args.score:
+        scores = search_result.summary.get("scores", [])
+        if candidate_index < len(scores):
+            score = _score_from_dict(scores[candidate_index])
+    allowed_ext = getattr(args, "allowed_extension", None) or None
+    allowed_extensions = set(allowed_ext) if allowed_ext else None
+    constraints = DownloadConstraint(
+        allow_locked=getattr(args, "allow_locked", False),
+        require_score_min=getattr(args, "score_min", None),
+        max_files=getattr(args, "max_files", None),
+        max_total_bytes=getattr(args, "max_total_bytes", None),
+        allowed_extensions=allowed_extensions,
+    )
+    download_request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.ALBUM,
+        query=f"{args.artist} - {args.album}",
+        score=score,
+        constraints=constraints,
+    )
+    download_plan_result = DownloadPlanningService().plan_download(download_request)
+    if download_plan_result.status == Status.FAILED:
+        print(_render_result(search_result))
+        print(_render_result(download_plan_result))
+        return 1
+    download_plan = _extract_download_plan(download_plan_result)
+    priority = TransferPriority(args.priority)
+    transfer_result = TransferPlanningService().plan_queue(download_plan, priority=priority)
+    print(_render_result(search_result))
+    print(_render_result(download_plan_result))
+    print(_render_result(transfer_result))
+    return _exit_code(transfer_result.status)
 
 
 def run_provider_inspect(args: argparse.Namespace) -> int:
