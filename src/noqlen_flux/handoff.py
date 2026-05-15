@@ -69,15 +69,20 @@ _FORBIDDEN_FIELDS = (
 )
 
 
-def _contains_forbidden_field(data: dict[str, Any]) -> tuple[bool, str | None]:
-    for key, value in data.items():
-        normalized_key = key.lower().replace("_", "-")
-        for forbidden in _FORBIDDEN_FIELDS:
-            normalized_forbidden = forbidden.lower().replace("_", "-")
-            if normalized_forbidden in normalized_key:
-                return True, key
-        if isinstance(value, dict):
+def _contains_forbidden_field(data: Any) -> tuple[bool, str | None]:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            normalized_key = str(key).lower().replace("_", "-")
+            for forbidden in _FORBIDDEN_FIELDS:
+                normalized_forbidden = forbidden.lower().replace("_", "-")
+                if normalized_forbidden in normalized_key:
+                    return True, str(key)
             found, found_key = _contains_forbidden_field(value)
+            if found:
+                return True, found_key
+    elif isinstance(data, (list, tuple)):
+        for item in data:
+            found, found_key = _contains_forbidden_field(item)
             if found:
                 return True, found_key
     return False, None

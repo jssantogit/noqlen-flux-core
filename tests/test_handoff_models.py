@@ -154,6 +154,11 @@ def test_validate_safe_metadata_blocks_forbidden_fields() -> None:
             validate_safe_metadata({forbidden: "value"})
 
 
+def test_validate_safe_metadata_blocks_forbidden_fields_inside_lists() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        validate_safe_metadata({"nested": [{"raw_provider_payload": "value"}]})
+
+
 def test_validate_safe_metadata_accepts_clean_metadata() -> None:
     result = validate_safe_metadata({"purpose": "demo", "status": "test"})
     assert result == {"purpose": "demo", "status": "test"}
