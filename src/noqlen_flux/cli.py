@@ -1188,7 +1188,7 @@ def run_transfer_status_slskd(args: argparse.Namespace) -> int:
     --allow-network, --url, and --api-key-env.
     """
     from noqlen_flux.providers.slskd import SlskdProvider, SlskdProviderConfig
-    from noqlen_flux.results import FluxResult, Status, FluxError, Artifact
+    from noqlen_flux.results import FluxResult, Status, FluxError, FluxWarning, Artifact
 
     transfer_id = args.transfer_id
     queue_item_id = getattr(args, "queue_item_id", None)

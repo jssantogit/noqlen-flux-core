@@ -25,8 +25,8 @@ def validate_safe_relative_path(value: str | None, *, field_name: str = "path") 
             raise ValueError(f"{field_name}: Path traversal marker '{marker}' is not allowed.")
     normalized = value.replace("\\", "/")
     parts = normalized.split("/")
-    if ".." in parts:
-        raise ValueError(f"{field_name}: Parent directory traversal is not allowed.")
+    if ".." in parts or "." in parts:
+        raise ValueError(f"{field_name}: Parent directory or dot-only traversal is not allowed.")
     return normalized
 
 
@@ -40,7 +40,7 @@ def is_safe_relative_path(value: str) -> bool:
             return False
     normalized = value.replace("\\", "/")
     parts = normalized.split("/")
-    if ".." in parts:
+    if ".." in parts or "." in parts:
         return False
     return True
 

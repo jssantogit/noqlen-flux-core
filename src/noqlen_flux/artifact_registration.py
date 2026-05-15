@@ -40,6 +40,12 @@ class DownloadArtifactRegistration:
         self._validate_relative_path()
 
     def _validate_relative_path(self) -> None:
+        _TRAVERSAL_MARKERS = ("~", "$", "{", "}")
+        for marker in _TRAVERSAL_MARKERS:
+            if marker in self.relative_path:
+                raise ValueError(
+                    f"relative_path contains traversal marker: {marker!r}"
+                )
         normalized = self.relative_path.replace("\\", "/")
         parts = normalized.split("/")
         for part in parts:
@@ -47,7 +53,7 @@ class DownloadArtifactRegistration:
                 raise ValueError(
                     f"relative_path contains unsafe segment: {part!r}"
                 )
-        if normalized.startswith("/") or normalized.startswith(".."):
+        if normalized.startswith("/") or normalized.startswith("\\") or normalized.startswith(".."):
             raise ValueError("relative_path must be a safe relative path")
 
     @classmethod
