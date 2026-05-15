@@ -1616,13 +1616,6 @@ def run_staging_apply(args: argparse.Namespace) -> int:
     exec_service = StagingExecutionService()
 
     if dry_run:
-        if not args.apply:
-            incoming_dir = config.workspace_root / "incoming"
-            incoming_dir.mkdir(parents=True, exist_ok=True)
-            demo_file = incoming_dir / f"{item_id}.txt"
-            if not demo_file.exists():
-                demo_file.write_text(f"Fake demo content for {item_id}\n")
-
         result = exec_service.apply_staging(
             staging_plan, config,
             apply_policy=DEFAULT_ROUTING_APPLY_POLICY,
