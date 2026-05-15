@@ -295,6 +295,21 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_execute_mode.add_argument("--apply", action="store_true", help="Submit to fake provider (in-memory)")
     transfer_execute_fake.set_defaults(func=run_transfer_execute_fake)
 
+    transfer_execute_slskd = transfer_execute_subparsers.add_parser("slskd", help="Preview slskd queue execution (offline/fake only)")
+    transfer_execute_slskd.add_argument("--artist", required=True, help="Artist name")
+    transfer_execute_slskd.add_argument("--title", required=True, help="Track title")
+    transfer_execute_slskd.add_argument("--score", action="store_true", help="Include pre-download scoring")
+    transfer_execute_slskd.add_argument("--priority", choices=[item.value for item in TransferPriority], default=TransferPriority.NORMAL.value)
+    transfer_execute_slskd.add_argument("--locked", action="store_true", help="Simulate locked file scenario")
+    transfer_execute_slskd.add_argument("--duplicate", action="store_true", help="Simulate duplicate scenario")
+    transfer_execute_slskd.add_argument("--provider-error", action="store_true", help="Simulate provider error scenario")
+    transfer_execute_slskd.add_argument("--unavailable", action="store_true", help="Simulate unavailable scenario")
+    transfer_execute_slskd.add_argument("--offline", action="store_true", help="Force offline mode (default, always enforced)")
+    transfer_execute_slskd_mode = transfer_execute_slskd.add_mutually_exclusive_group()
+    transfer_execute_slskd_mode.add_argument("--dry-run", action="store_true", help="Preview execution without submitting (default)")
+    transfer_execute_slskd_mode.add_argument("--apply", action="store_true", help="Simulate submit to fake slskd client (in-memory)")
+    transfer_execute_slskd.set_defaults(func=run_transfer_execute_slskd)
+
     provider = subparsers.add_parser("provider", help="Inspect provider health and capabilities")
     provider_subparsers = provider.add_subparsers(dest="provider_command")
 
@@ -986,6 +1001,129 @@ def run_transfer_execute_fake(args: argparse.Namespace) -> int:
     )
     fake_exec_provider = FakeQueueExecutionProvider()
     result = exec_service.execute_queue(request, fake_exec_provider)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_transfer_execute_slskd(args: argparse.Namespace) -> int:
+    """Preview slskd queue execution using offline/fake client only.
+
+    No real network, no real downloads, no real queue operations.
+    This is a controlled simulation for preview and testing.
+    """
+    from noqlen_flux.providers.slskd import FakeSlskdClient, SlskdProvider
+
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+
+    queue_failures = getattr(args, "provider_error", False)
+    queue_duplicate = getattr(args, "duplicate", False)
+    queue_locked = getattr(args, "locked", False)
+    queue_unavailable = getattr(args, "unavailable", False)
+
+    fake_client = FakeSlskdClient(
+        responses=[{
+            "responses": [{
+                "username": "fake-user",
+                "directory": "Example Artist/Example Album",
+                "files": [{"filename": "Example Track.flac", "size": 12345678, "extension": "flac"}],
+                "locked_files": [],
+            }],
+            "response_count": 1,
+        }],
+        queue_simulate_failures=queue_failures,
+        queue_simulate_duplicate=queue_duplicate,
+        queue_simulate_locked=queue_locked,
+        queue_simulate_provider_unavailable=queue_unavailable,
+    )
+    provider = SlskdProvider(client=fake_client)
+
+    provider_result = provider.search(query)
+    if not provider_result.candidates:
+        result = TransferExecutionService().result(
+            status=Status.FAILED,
+            error="no candidates found from slskd search",
+        )
+        print(_render_result(result))
+        return 1
+
+    candidate = provider_result.candidates[0]
+    if candidate.files:
+        candidate = candidate._replace(files=[f._replace(locked=queue_locked) for f in candidate.files]) if hasattr(candidate, '_replace') else candidate
+
+    score = None
+    if args.score:
+        score = CandidateScoringService().score_candidate(query, candidate)
+
+    download_request = DownloadRequest.from_candidate(
+        candidate=candidate,
+        intent=DownloadIntent.TRACK,
+        query=f"{args.artist} - {args.title}",
+        score=score,
+    )
+    download_plan_result = DownloadPlanningService().plan_download(download_request)
+    if download_plan_result.status == Status.FAILED:
+        print(_render_result(download_plan_result))
+        return 1
+
+    download_plan = _extract_download_plan(download_plan_result)
+    priority = TransferPriority(args.priority)
+    queue_plan_result = TransferPlanningService().plan_queue(download_plan, priority=priority)
+    if queue_plan_result.status == Status.FAILED:
+        print(_render_result(queue_plan_result))
+        return 1
+
+    queue_plan = _extract_queue_plan(queue_plan_result)
+
+    if queue_locked:
+        from noqlen_flux.transfers import QueueItem as QI, TransferItem as TI, TransferState as TS
+        locked_items = []
+        for qi in queue_plan.items:
+            if qi.transfer_item:
+                ti = qi.transfer_item
+                locked_ti = TI(
+                    item_id=ti.item_id,
+                    plan_id=ti.plan_id,
+                    candidate_id=ti.candidate_id,
+                    filename=ti.filename,
+                    target_relative_path=ti.target_relative_path,
+                    size_bytes=ti.size_bytes,
+                    priority=ti.priority,
+                    locked=True,
+                    metadata=ti.metadata,
+                )
+                locked_items.append(QI(
+                    queue_item_id=qi.queue_item_id,
+                    transfer_item=locked_ti,
+                    state=qi.state,
+                    priority=qi.priority,
+                    warnings=qi.warnings,
+                    errors=qi.errors,
+                    metadata=qi.metadata,
+                ))
+        queue_plan = queue_plan.__class__(
+            queue_id=queue_plan.queue_id,
+            request_id=queue_plan.request_id,
+            state=queue_plan.state,
+            items=locked_items,
+            blocked=queue_plan.blocked,
+            block_reasons=list(queue_plan.block_reasons),
+            warnings=list(queue_plan.warnings),
+            metadata=queue_plan.metadata,
+        )
+
+    mode = TransferExecutionMode.DRY_RUN
+    if getattr(args, "apply", False):
+        mode = TransferExecutionMode.APPLY
+
+    allow_provider_queue = mode == TransferExecutionMode.APPLY
+    exec_service = TransferExecutionService()
+    request = exec_service.build_execution_request(
+        queue_plan=queue_plan,
+        mode=mode,
+        allow_provider_queue=allow_provider_queue,
+        allow_locked=queue_locked,
+    )
+    result = exec_service.execute_queue(request, provider)
     print(_render_result(result))
     return _exit_code(result.status)
 

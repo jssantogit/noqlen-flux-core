@@ -1055,6 +1055,8 @@ class SlskdQueuePayloadMapper:
         items: list[TransferSubmissionItem] = []
         has_errors = False
         all_blocked = True
+        has_locked = False
+        has_duplicate = False
 
         for raw_item in raw_items:
             item_state = SlskdQueuePayloadMapper._map_item_state(raw_item)
@@ -1067,10 +1069,12 @@ class SlskdQueuePayloadMapper:
                 TransferSubmissionState.UNAVAILABLE,
             ):
                 has_errors = True
+            if item_state == TransferSubmissionState.LOCKED_ITEM:
+                has_locked = True
+            if item_state == TransferSubmissionState.DUPLICATE:
+                has_duplicate = True
             if item_state not in (
                 TransferSubmissionState.BLOCKED,
-                TransferSubmissionState.LOCKED_ITEM,
-                TransferSubmissionState.DUPLICATE,
             ):
                 all_blocked = False
 
@@ -1099,6 +1103,9 @@ class SlskdQueuePayloadMapper:
         elif all_blocked and items:
             overall_state = TransferSubmissionState.BLOCKED
             blocked = True
+        elif (has_locked or has_duplicate) and not has_errors:
+            overall_state = TransferSubmissionState.SUCCESS
+            blocked = False
         else:
             overall_state = TransferSubmissionState.SUCCESS
             blocked = False
@@ -1176,7 +1183,7 @@ def _simulate_slskd_queue_submission(
                 "queue_item_id": queue_item_id,
                 "state": SlskdQueueSubmissionState.DUPLICATE.value,
                 "message": f"duplicate {item.get('filename', 'unknown')}",
-                "errors": ["item already in queue"],
+                "warnings": ["item already in queue"],
             })
             continue
 

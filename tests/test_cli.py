@@ -1940,3 +1940,46 @@ def test_transfer_execute_fake_no_candidates(capsys) -> None:
 
     output = capsys.readouterr().out
     assert "transfer-execution: failed" in output or "no candidates" in output.lower()
+
+
+def test_transfer_execute_slskd_offline_dry_run_works(capsys) -> None:
+    assert main(["transfer", "execute", "slskd", "--artist", "Example Artist", "--title", "Example Track", "--offline", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+
+
+def test_transfer_execute_slskd_offline_apply_works(capsys) -> None:
+    assert main(["transfer", "execute", "slskd", "--artist", "Example Artist", "--title", "Example Track", "--offline", "--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+
+
+def test_transfer_execute_slskd_offline_apply_locked(capsys) -> None:
+    assert main(["transfer", "execute", "slskd", "--artist", "Example Artist", "--title", "Example Track", "--offline", "--apply", "--locked"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: warning" in output
+
+
+def test_transfer_execute_slskd_offline_apply_duplicate(capsys) -> None:
+    assert main(["transfer", "execute", "slskd", "--artist", "Example Artist", "--title", "Example Track", "--offline", "--apply", "--duplicate"]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: warning" in output
+
+
+def test_transfer_execute_slskd_offline_apply_provider_error(capsys) -> None:
+    assert main(["transfer", "execute", "slskd", "--artist", "Example Artist", "--title", "Example Track", "--offline", "--apply", "--provider-error"]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output
+
+
+def test_transfer_execute_slskd_offline_apply_unavailable(capsys) -> None:
+    assert main(["transfer", "execute", "slskd", "--artist", "Example Artist", "--title", "Example Track", "--offline", "--apply", "--unavailable"]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output
+    assert "slskd provider unavailable" in output
