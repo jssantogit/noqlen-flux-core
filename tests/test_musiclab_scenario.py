@@ -377,7 +377,7 @@ class TestScenarioPacks:
 
     def test_list_all_packs(self) -> None:
         packs = list_all_packs()
-        assert len(packs) == 11
+        assert len(packs) == 12
         pack_ids = {p.pack_id for p in packs}
         assert "false-positive-guard" in pack_ids
         assert "source-profiles" in pack_ids

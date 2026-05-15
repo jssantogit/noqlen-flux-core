@@ -578,6 +578,84 @@ class MusicLabScenarioRunnerService(FluxService):
                     )
                 )
 
+        if cfg.run_cleanup:
+            try:
+                steps.append(
+                    MusicLabScenarioStepResult(
+                        step_name="cleanup-simulation",
+                        status="success",
+                        message="Cleanup execution (dry-run) simulated for scenario.",
+                        metadata={"cleanup_scope": "workspace-only", "dry_run": True},
+                    )
+                )
+
+                from noqlen_flux.cleanup import (
+                    CleanupCandidate,
+                    CleanupCandidateKind,
+                )
+                candidate_kind: CleanupCandidateKind | None = None
+                if actual_staging == "approved":
+                    candidate_kind = None
+                elif actual_staging == "rejected":
+                    candidate_kind = CleanupCandidateKind.REJECTED
+                elif actual_staging == "delete_eligible":
+                    candidate_kind = CleanupCandidateKind.DELETE_ELIGIBLE
+                elif actual_staging == "quarantine":
+                    candidate_kind = CleanupCandidateKind.ORPHANED
+                elif fixture.probe.truncated or not fixture.probe.decode_ok:
+                    candidate_kind = CleanupCandidateKind.TEMPORARY
+                else:
+                    candidate_kind = CleanupCandidateKind.UNKNOWN
+
+                if candidate_kind is not None:
+                    steps.append(
+                        MusicLabScenarioStepResult(
+                            step_name="cleanup-candidate",
+                            status="success",
+                            message=f"Cleanup candidate kind: {candidate_kind.value}",
+                            actual_value=candidate_kind.value,
+                        )
+                    )
+
+                    if candidate_kind in (CleanupCandidateKind.REJECTED, CleanupCandidateKind.DELETE_ELIGIBLE):
+                        destructive_action_detected = True
+                        warnings.append(f"Cleanup candidate kind '{candidate_kind.value}' flagged - verify no destructive action")
+                else:
+                    steps.append(
+                        MusicLabScenarioStepResult(
+                            step_name="cleanup-candidate",
+                            status="success",
+                            message="No cleanup candidate generated (approved/protected item).",
+                            metadata={"protected": True, "staging": actual_staging},
+                        )
+                    )
+
+            except Exception as exc:
+                steps.append(
+                    MusicLabScenarioStepResult(
+                        step_name="cleanup-simulation",
+                        status="skipped",
+                        message=f"Cleanup simulation skipped: {exc}",
+                    )
+                )
+
+        if cfg.run_e2e:
+            steps.append(
+                MusicLabScenarioStepResult(
+                    step_name="e2e-final-report",
+                    status="success",
+                    message=f"E2E MVP scenario complete: {scenario.scenario_id}. "
+                            f"grade={actual_grade}, routing={actual_routing}, staging={actual_staging}, "
+                            f"destructive={destructive_action_detected}, handoff_forge_ready={handoff_forge_ready if 'handoff_forge_ready' in dir() else 'N/A'}",
+                    metadata={
+                        "scenario_id": scenario.scenario_id,
+                        "category": scenario.category.value,
+                        "pipeline_complete": True,
+                        "destructive_action_detected": destructive_action_detected,
+                    },
+                )
+            )
+
         expected_grade = _derive_expected_grade(fixture, scenario)
         expected_routing = _derive_expected_routing(fixture, scenario)
         expected_staging = _derive_expected_staging(fixture, scenario)
@@ -908,6 +986,90 @@ def _validate_critical_rules(
                     "Must go to review or quarantine, never rejected/delete."
                 )
                 regression_notes.append("transcode-suspicion-bad-staging")
+
+    _validate_e2e_cleanup_rules(
+        scenario, fixture, actual_grade, actual_routing, actual_staging,
+        objective_failures, heuristic_warnings,
+        errors, warnings, regression_notes,
+    )
+
+
+def _validate_e2e_cleanup_rules(
+    scenario: MusicLabScenario,
+    fixture: SyntheticFixture,
+    actual_grade: str,
+    actual_routing: str,
+    actual_staging: str,
+    objective_failures: list[str],
+    heuristic_warnings: list[str],
+    errors: list[str],
+    warnings: list[str],
+    regression_notes: list[str],
+) -> None:
+    from noqlen_flux.musiclab_scenario import ScenarioCategory, ScenarioKind
+
+    category = scenario.category
+    kind = scenario.kind
+
+    if kind == ScenarioKind.APPROVED_NEVER_CLEANUP:
+        if actual_staging == "approved":
+            pass
+        if actual_staging in ("delete_eligible",):
+            errors.append("CRITICAL: Approved item flagged as delete_eligible. Approved items must NEVER be cleaned up.")
+            regression_notes.append("approved-delete-eligible-cleanup-violation")
+
+    if kind == ScenarioKind.REJECTED_RETENTION:
+        if actual_staging != "rejected":
+            warnings.append(f"Expected rejected staging for rejected retention scenario, got {actual_staging}.")
+        if actual_routing in ("delete_eligible",):
+            errors.append("CRITICAL: Rejected retention scenario routed to delete_eligible. Rejected items must not be auto-deleted.")
+            regression_notes.append("rejected-retention-delete-eligible-violation")
+
+    if kind == ScenarioKind.QUARANTINE_RETENTION:
+        if actual_staging == "delete_eligible":
+            errors.append("CRITICAL: Quarantine retention scenario has delete_eligible staging. Quarantine items must not be auto-cleaned.")
+            regression_notes.append("quarantine-retention-delete-eligible-violation")
+
+    if kind == ScenarioKind.CORRUPT:
+        if actual_staging == "delete_eligible":
+            errors.append("CRITICAL: Corrupt scenario flagged as delete_eligible. Corrupt files go to rejected, never deleted.")
+            regression_notes.append("corrupt-delete-eligible-violation")
+        if actual_routing == "delete_eligible":
+            errors.append("CRITICAL: Corrupt scenario routed to delete_eligible. Corrupt files must route to rejected.")
+            regression_notes.append("corrupt-delete-eligible-routing-violation")
+
+    if kind == ScenarioKind.CLEANUP_CANDIDATE:
+        if actual_staging == "approved":
+            errors.append("CRITICAL: Incomplete download cleanup candidate routed to approved. Should be rejected or review.")
+            regression_notes.append("incomplete-download-approved-violation")
+
+    if kind == ScenarioKind.HANDOFF_READY:
+        if actual_staging == "delete_eligible":
+            errors.append("CRITICAL: Handoff-ready scenario flagged delete_eligible. Handoff-ready items must not be deleted.")
+            regression_notes.append("handoff-ready-delete-eligible-violation")
+
+    if kind == ScenarioKind.NO_DESTRUCTIVE_ACTION:
+        if actual_staging in ("delete_eligible",):
+            errors.append("CRITICAL: No-destructive-action scenario has delete_eligible staging. Source profile must not trigger destructive action.")
+            regression_notes.append("source-profile-destructive-action-violation")
+        if actual_routing in ("delete_eligible",):
+            errors.append("CRITICAL: No-destructive-action scenario routed to delete_eligible. Source profile must not trigger delete routing.")
+            regression_notes.append("source-profile-destructive-routing-violation")
+
+    if category == ScenarioCategory.CLEANUP:
+        if actual_staging == "approved":
+            errors.append("CRITICAL: Cleanup category scenario has approved staging. Cleanup candidates should not be approved.")
+            regression_notes.append("cleanup-category-approved-violation")
+        if actual_routing == "approved":
+            errors.append("CRITICAL: Cleanup category scenario routed to approved. Cleanup candidates should be review/rejected.")
+            regression_notes.append("cleanup-category-approved-routing-violation")
+
+    if category == ScenarioCategory.MVP_E2E:
+        if actual_staging == "approved" and kind in (ScenarioKind.APPROVED_NEVER_CLEANUP, ScenarioKind.HANDOFF_READY):
+            pass
+        elif actual_staging == "delete_eligible":
+            errors.append("CRITICAL: MVP E2E scenario has delete_eligible staging. MVP E2E must never produce automatic deletions.")
+            regression_notes.append("mvp-e2e-delete-eligible-violation")
 
 
 def has_objective_failure(fixture: SyntheticFixture) -> bool:

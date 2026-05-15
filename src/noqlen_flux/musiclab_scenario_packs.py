@@ -1061,6 +1061,134 @@ def _severity_for_advanced(category: ScenarioCategory, probe: SyntheticProbeProf
     return ScenarioSeverity.MEDIUM
 
 
+def build_mvp_end_to_end_pack() -> tuple[MusicLabScenarioPack, dict[str, SyntheticFixture]]:
+    scenarios: list[MusicLabScenario] = []
+    fixtures: dict[str, SyntheticFixture] = {}
+
+    e2e_config = MusicLabScenarioConfig(run_cleanup=True, run_e2e=True)
+
+    specs: list[tuple[str, str, ScenarioCategory, ScenarioKind, str, SyntheticProbeProfile, list[str], ScenarioSeverity]] = [
+        (
+            "good_flac_to_handoff",
+            "Good FLAC 16/44.1: full pipeline to handoff, no cleanup action expected",
+            ScenarioCategory.GOOD, ScenarioKind.HANDOFF_READY,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True),
+            [], ScenarioSeverity.CRITICAL,
+        ),
+        (
+            "mp3_320_good_to_handoff",
+            "MP3 320 kbps good: full pipeline to handoff",
+            ScenarioCategory.GOOD, ScenarioKind.HANDOFF_READY,
+            "mp3",
+            SyntheticProbeProfile(codec="mp3", sample_rate=44100, bit_depth=16, bitrate_bps=320000, decode_ok=True, has_audio_stream=True),
+            [], ScenarioSeverity.CRITICAL,
+        ),
+        (
+            "qobuz_like_cutoff_to_handoff_or_review",
+            "Qobuz-like 9.4 kHz cutoff with decode OK: must NOT be auto-punished, handoff available",
+            ScenarioCategory.FALSE_POSITIVE, ScenarioKind.HANDOFF_READY,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True, spectral_cutoff_hz=9400),
+            [], ScenarioSeverity.CRITICAL,
+        ),
+        (
+            "fake_flac_to_review_or_quarantine",
+            "Fake FLAC with lowpass: must route to review, never rejected, never deleted",
+            ScenarioCategory.SUSPICIOUS, ScenarioKind.TRANSCODE,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True, lowpass_suspicion=True),
+            [], ScenarioSeverity.HIGH,
+        ),
+        (
+            "corrupt_file_to_rejected_no_delete",
+            "Corrupt file: must be rejected but NEVER deleted",
+            ScenarioCategory.BAD, ScenarioKind.CORRUPT,
+            "flac",
+            SyntheticProbeProfile(probe_success=False, decode_ok=False, has_audio_stream=False),
+            ["bad", "corrupt"], ScenarioSeverity.CRITICAL,
+        ),
+        (
+            "incomplete_download_cleanup_candidate",
+            "Incomplete download (.part): cleanup candidate, must be safe cleanup only",
+            ScenarioCategory.CLEANUP, ScenarioKind.CLEANUP_CANDIDATE,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, truncated=True, decode_ok=False, file_size_bytes=5000000),
+            ["incomplete", "partial"], ScenarioSeverity.HIGH,
+        ),
+        (
+            "rejected_retention_not_expired",
+            "Rejected item with retention not expired: must NOT be cleaned",
+            ScenarioCategory.CLEANUP, ScenarioKind.REJECTED_RETENTION,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=False, has_audio_stream=False),
+            ["rejected", "retention"], ScenarioSeverity.HIGH,
+        ),
+        (
+            "rejected_retention_expired_workspace_only",
+            "Rejected item with expired retention: can only be cleaned inside workspace",
+            ScenarioCategory.CLEANUP, ScenarioKind.REJECTED_RETENTION,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=False, has_audio_stream=False),
+            ["rejected", "expired"], ScenarioSeverity.HIGH,
+        ),
+        (
+            "quarantine_retention_not_expired",
+            "Quarantine item with retention not expired: must NOT be cleaned",
+            ScenarioCategory.CLEANUP, ScenarioKind.QUARANTINE_RETENTION,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True, lowpass_suspicion=True),
+            ["quarantine", "retention"], ScenarioSeverity.HIGH,
+        ),
+        (
+            "approved_never_cleanup",
+            "Approved item: must NEVER be cleaned up",
+            ScenarioCategory.MVP_E2E, ScenarioKind.APPROVED_NEVER_CLEANUP,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True),
+            ["approved", "protected"], ScenarioSeverity.CRITICAL,
+        ),
+        (
+            "handoff_manifest_invalid_cleanup_safe",
+            "Invalid handoff manifest: cleanup must be safe, no destructive action",
+            ScenarioCategory.MVP_E2E, ScenarioKind.HANDOFF_READY,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True),
+            ["handoff", "invalid-manifest"], ScenarioSeverity.HIGH,
+        ),
+        (
+            "source_profile_suspicious_no_destructive_action",
+            "Suspicious source profile: must NOT trigger destructive action",
+            ScenarioCategory.FALSE_POSITIVE, ScenarioKind.NO_DESTRUCTIVE_ACTION,
+            "flac",
+            SyntheticProbeProfile(codec="flac", sample_rate=44100, bit_depth=16, decode_ok=True, has_audio_stream=True, metadata={"source_profile": "youtube_rip_like"}),
+            ["source-profile", "suspicious"], ScenarioSeverity.HIGH,
+        ),
+    ]
+
+    for fid, desc, category, kind, codec, probe, tags, severity in specs:
+        scenarios.append(
+            _scenario(
+                fid, desc, category, kind,
+                severity=severity, tags=tags + ["mvp-e2e", fid],
+                config=e2e_config,
+            )
+        )
+        fixtures[fid] = _fixture(
+            fid, desc, "Test Artist", f"E2E {fid.replace('_', ' ').title()}",
+            probe, tags=tags + ["mvp-e2e"], codec=codec, ext=codec,
+        )
+
+    pack = MusicLabScenarioPack(
+        pack_id="mvp-end-to-end",
+        description="MVP end-to-end scenario pack: complete pipeline from search to cleanup with conservative guard rules.",
+        version="1",
+        scenarios=scenarios,
+        metadata={"total_scenarios": len(scenarios), "engine": "musiclab-scenario-runner"},
+    )
+    return pack, fixtures
+
+
 _ALL_PACKS: dict[str, tuple[MusicLabScenarioPack, dict[str, SyntheticFixture]]] | None = None
 
 
@@ -1080,6 +1208,7 @@ def all_scenario_packs() -> dict[str, tuple[MusicLabScenarioPack, dict[str, Synt
         "album-scenarios": build_album_scenarios_pack(),
         "edge-cases": build_edge_case_pack(),
         "source-profiles": build_source_profile_pack(),
+        "mvp-end-to-end": build_mvp_end_to_end_pack(),
     }
     return _ALL_PACKS
 

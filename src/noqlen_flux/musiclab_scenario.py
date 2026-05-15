@@ -21,6 +21,8 @@ class ScenarioCategory(StrEnum):
     BAD = "bad"
     SUSPICIOUS = "suspicious"
     FALSE_POSITIVE = "false_positive"
+    CLEANUP = "cleanup"
+    MVP_E2E = "mvp_e2e"
 
 
 class ScenarioSeverity(StrEnum):
@@ -42,6 +44,12 @@ class ScenarioKind(StrEnum):
     FAKE_SAMPLE_RATE = "fake_sample_rate"
     METADATA_VARIANT = "metadata_variant"
     EDGE_CASE = "edge_case"
+    HANDOFF_READY = "handoff_ready"
+    CLEANUP_CANDIDATE = "cleanup_candidate"
+    REJECTED_RETENTION = "rejected_retention"
+    QUARANTINE_RETENTION = "quarantine_retention"
+    APPROVED_NEVER_CLEANUP = "approved_never_cleanup"
+    NO_DESTRUCTIVE_ACTION = "no_destructive_action"
 
 
 @dataclass(slots=True, frozen=True)
@@ -55,6 +63,8 @@ class MusicLabScenarioConfig:
     run_routing: bool = True
     run_staging: bool = True
     run_handoff: bool = True
+    run_cleanup: bool = False
+    run_e2e: bool = False
     metadata: SafeMetadata = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
