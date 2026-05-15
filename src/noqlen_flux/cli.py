@@ -15,7 +15,7 @@ from .reports import ReportFormat
 from .results import FluxError, FluxResult, Status
 from .scoring import CandidateScore
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
+from .services import ArtifactRegistrationService, CandidateScoringService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
 from .transfers import TransferExecutionMode, TransferPriority
 
 
