@@ -1,12 +1,15 @@
 from noqlen_flux.routing import (
+    DEFAULT_ROUTING_APPLY_POLICY,
     DEFAULT_ROUTING_POLICY,
     RoutingActionType,
+    RoutingApplyPolicy,
     RoutingDecision,
     RoutingOutcome,
     RoutingPlan,
     RoutingPolicy,
     RoutingReason,
     RoutingReasonSource,
+    default_routing_apply_policy,
     default_routing_policy,
 )
 
@@ -175,3 +178,53 @@ def test_routing_reason_serializes_safely() -> None:
     assert payload["code"] == "test-reason"
     assert payload["source"] == "quality_grade"
     assert payload["metadata"]["token"] == "[redacted]"
+
+
+class TestRoutingApplyPolicy:
+    def test_default_policy_is_safe(self) -> None:
+        policy = default_routing_apply_policy()
+        assert policy.dry_run_default is True
+        assert policy.apply_explicit is True
+        assert policy.allow_delete_eligible is False
+        assert policy.allow_mark_delete_eligible is False
+        assert policy.workspace_only is True
+        assert policy.block_absolute_path is True
+        assert policy.block_traversal is True
+        assert policy.block_symlink_escape is True
+        assert policy.block_protected_roots is True
+        assert policy.generate_safety_report is True
+
+    def test_policy_allows_approved_quarantine_rejected(self) -> None:
+        policy = default_routing_apply_policy()
+        assert policy.allow_move_to_approved is True
+        assert policy.allow_move_to_quarantine is True
+        assert policy.allow_move_to_rejected is True
+
+    def test_policy_forbids_delete_operations(self) -> None:
+        policy = default_routing_apply_policy()
+        assert policy.allow_delete_eligible is False
+        assert policy.allow_mark_delete_eligible is False
+
+    def test_policy_is_versioned(self) -> None:
+        policy = RoutingApplyPolicy(
+            name="test_apply_v1",
+            version="1",
+            description="Test apply policy",
+        )
+        assert policy.name == "test_apply_v1"
+        assert policy.version == "1"
+
+    def test_policy_serializes_safely(self) -> None:
+        policy = RoutingApplyPolicy(
+            name="test_v2",
+            version="2",
+            description="Test with secret",
+            metadata={"secret": "hidden"},
+        )
+        payload = policy.to_dict()
+        assert payload["name"] == "test_v2"
+        assert payload["metadata"]["secret"] == "[redacted]"
+
+    def test_policy_review_is_manual_only(self) -> None:
+        policy = default_routing_apply_policy()
+        assert policy.allow_review_manual_only is True

@@ -5,11 +5,13 @@ import pytest
 
 from noqlen_flux.config import FluxConfig
 from noqlen_flux.results import Status
+from noqlen_flux.routing import DEFAULT_ROUTING_APPLY_POLICY, RoutingApplyPolicy
 from noqlen_flux.safety import PathSafetyError
 from noqlen_flux.services.staging_execution import StagingExecutionService
 from noqlen_flux.staging import (
     DEFAULT_STAGING_EXECUTION_POLICY,
     StagingActionType,
+    StagingApplyReport,
     StagingArea,
     StagingExecutionPolicy,
     StagingItem,
@@ -595,3 +597,208 @@ def test_execution_summary_in_result(tmp_path) -> None:
     assert "planned_count" in summary
     assert "blocked_count" in summary
     assert "skipped_count" in summary
+
+
+class TestApplyStaging:
+    def test_apply_staging_dry_run_does_not_copy_files(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = _config(tmp_path)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test")
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        assert not (tmp_path / "approved" / "item-1.txt").exists()
+        assert result.summary["mode"] == "dry-run"
+        assert "safety_report" in result.summary
+
+    def test_apply_staging_dry_run_generates_safety_report(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = _config(tmp_path)
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        safety_report = result.summary.get("safety_report")
+        assert safety_report is not None
+        assert safety_report["mode"] == "dry-run"
+        assert len(safety_report["safety_checks"]) > 0
+        assert any(c["check"] == "no_delete" for c in safety_report["safety_checks"])
+        assert any(c["check"] == "workspace_only" for c in safety_report["safety_checks"])
+
+    def test_apply_staging_dry_run_safety_report_has_policy_name(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = _config(tmp_path)
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        safety_report = result.summary.get("safety_report")
+        assert safety_report is not None
+        assert safety_report["policy_name"] == DEFAULT_ROUTING_APPLY_POLICY.name
+
+    def test_apply_staging_apply_copies_approved(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test")
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        assert (tmp_path / "approved" / "item-1.txt").exists()
+
+    def test_apply_staging_apply_generates_safety_report_on_success(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test")
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        safety_report = result.summary.get("safety_report")
+        assert safety_report is not None
+        assert safety_report["mode"] == "apply"
+
+    def test_apply_staging_blocks_delete_eligible_by_default(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+
+        item = _staging_item(area=StagingArea.DELETE_ELIGIBLE, action_type=StagingActionType.MARK_DELETE_ELIGIBLE)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        assert result.status == Status.FAILED
+        assert "delete_eligible" in str(result.summary.get("error", "")).lower()
+
+    def test_apply_staging_can_allow_delete_eligible_with_policy(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test")
+
+        apply_policy = RoutingApplyPolicy(
+            name="allow_mark_v1",
+            version="1",
+            description="Allows mark delete eligible",
+            allow_mark_delete_eligible=True,
+        )
+        item = _staging_item(area=StagingArea.DELETE_ELIGIBLE, action_type=StagingActionType.MARK_DELETE_ELIGIBLE)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config, apply_policy=apply_policy)
+
+        assert result.status == Status.SUCCESS
+
+    def test_apply_staging_blocks_quarantine_if_policy_disallows(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test")
+
+        apply_policy = RoutingApplyPolicy(
+            name="block_quarantine_v1",
+            version="1",
+            description="Blocks quarantine",
+            allow_move_to_quarantine=False,
+        )
+        item = _staging_item(area=StagingArea.QUARANTINE)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config, apply_policy=apply_policy)
+
+        assert result.status == Status.FAILED
+
+    def test_apply_staging_blocks_rejected_if_policy_disallows(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test")
+
+        apply_policy = RoutingApplyPolicy(
+            name="block_rejected_v1",
+            version="1",
+            description="Blocks rejected",
+            allow_move_to_rejected=False,
+        )
+        item = _staging_item(area=StagingArea.REJECTED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config, apply_policy=apply_policy)
+
+        assert result.status == Status.FAILED
+
+    def test_apply_staging_multiple_items_with_safety_report(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        (tmp_path / "incoming").mkdir()
+        (tmp_path / "incoming" / "item-1.txt").write_text("test1")
+        (tmp_path / "incoming" / "item-2.txt").write_text("test2")
+
+        items = [
+            _staging_item(item_id="item-1", area=StagingArea.APPROVED),
+            _staging_item(item_id="item-2", area=StagingArea.QUARANTINE),
+        ]
+        plan = _staging_plan(items)
+
+        result = service.apply_staging(plan, config)
+
+        assert result.status == Status.SUCCESS
+        safety_report = result.summary.get("safety_report")
+        assert safety_report["total_items"] == 2
+        assert safety_report["applied_count"] >= 2
+
+    def test_apply_staging_safety_artifact_created(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = _config(tmp_path)
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        safety_artifacts = [a for a in result.artifacts if a.kind == "staging-apply-safety-report"]
+        assert len(safety_artifacts) == 1
+
+    def test_apply_staging_no_delete_in_safety_report(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = _config(tmp_path)
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        safety_report = result.summary.get("safety_report")
+        assert safety_report is not None
+        no_delete_check = [c for c in safety_report["safety_checks"] if c["check"] == "no_delete"]
+        assert len(no_delete_check) > 0
+        assert no_delete_check[0]["passed"] is True
+
+    def test_apply_staging_no_real_library_in_safety_notes(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = _config(tmp_path)
+
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        safety_report = result.summary.get("safety_report")
+        assert safety_report is not None
+        assert any("no real music library" in note.lower() or "no_library" in str(note).lower()
+                   or any("no_library" in str(c).lower() for c in safety_report.get("safety_checks", []))
+                   for note in safety_report.get("notes", [""]))

@@ -4,6 +4,7 @@ from noqlen_flux.staging import (
     DEFAULT_STAGING_EXECUTION_POLICY,
     DEFAULT_STAGING_POLICY,
     StagingActionType,
+    StagingApplyReport,
     StagingArea,
     StagingExecutionPolicy,
     StagingExecutionSummary,
@@ -301,3 +302,105 @@ def test_default_staging_execution_policy_exists() -> None:
     assert policy.allow_delete is False
     assert policy.allow_overwrite is False
     assert policy.create_workspace_dirs is True
+
+
+class TestStagingApplyReport:
+    def test_report_serializes_safely(self) -> None:
+        report = StagingApplyReport.from_execution_result(
+            report_id="rpt-1",
+            source_staging_plan_id="plan-1",
+            mode="dry-run",
+            timestamp="2025-01-01T00:00:00Z",
+            policy_name="default_apply_v1",
+            total_items=1,
+            planned_count=1,
+            applied_count=0,
+            blocked_count=0,
+            skipped_count=0,
+            failed_count=0,
+            metadata={"secret": "hidden"},
+        )
+        payload = report.to_dict()
+        assert payload["report_id"] == "rpt-1"
+        assert payload["mode"] == "dry-run"
+        assert payload["metadata"]["secret"] == "[redacted]"
+
+    def test_report_includes_safety_checks(self) -> None:
+        report = StagingApplyReport.from_execution_result(
+            report_id="rpt-2",
+            source_staging_plan_id="plan-2",
+            mode="apply",
+            timestamp="2025-01-01T00:00:00Z",
+            policy_name="default_apply_v1",
+            total_items=3,
+            planned_count=2,
+            applied_count=2,
+            blocked_count=1,
+            skipped_count=0,
+            failed_count=0,
+            safety_checks=[
+                {"check": "dry_run_default", "passed": True},
+                {"check": "workspace_only", "passed": True},
+                {"check": "no_delete", "passed": True},
+            ],
+            notes=["Workspace-only operations applied", "No delete operations"],
+        )
+        payload = report.to_dict()
+        assert len(payload["safety_checks"]) == 3
+        assert payload["safety_checks"][0]["check"] == "dry_run_default"
+        assert payload["mode"] == "apply"
+        assert payload["blocked_count"] == 1
+
+    def test_report_blocks_delete_eligible(self) -> None:
+        report = StagingApplyReport.from_execution_result(
+            report_id="rpt-3",
+            source_staging_plan_id="plan-3",
+            mode="dry-run",
+            timestamp="2025-01-01T00:00:00Z",
+            policy_name="default_apply_v1",
+            total_items=1,
+            planned_count=0,
+            applied_count=0,
+            blocked_count=1,
+            skipped_count=0,
+            failed_count=0,
+            blocked_operations=[
+                {"item_id": "item-1", "reason": "delete_eligible blocked by policy"},
+            ],
+        )
+        payload = report.to_dict()
+        assert len(payload["blocked_operations"]) == 1
+        assert payload["blocked_operations"][0]["item_id"] == "item-1"
+
+    def test_factory_creates_complete_report(self) -> None:
+        report = StagingApplyReport.from_execution_result(
+            report_id="rpt-factory",
+            source_staging_plan_id="plan-src",
+            mode="apply",
+            timestamp="2025-06-15T12:00:00Z",
+            policy_name="test_policy",
+            total_items=5,
+            planned_count=4,
+            applied_count=3,
+            blocked_count=1,
+            skipped_count=0,
+            failed_count=1,
+            operations=[{"action": "copy", "target": "approved/item.flac"}],
+            safety_checks=[{"check": "no_delete", "passed": True}],
+            blocked_operations=[],
+            skipped_operations=[],
+            warnings=["test warning"],
+            errors=[],
+            notes=["test note"],
+            metadata={"source": "test"},
+        )
+        payload = report.to_dict()
+        assert payload["report_id"] == "rpt-factory"
+        assert payload["source_staging_plan_id"] == "plan-src"
+        assert payload["total_items"] == 5
+        assert payload["applied_count"] == 3
+        assert payload["failed_count"] == 1
+        assert len(payload["operations"]) == 1
+        assert len(payload["safety_checks"]) == 1
+        assert payload["warnings"] == ["test warning"]
+        assert payload["notes"] == ["test note"]
