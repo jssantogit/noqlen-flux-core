@@ -19,6 +19,7 @@ from .reports import ReportService
 from .routing import RoutingDecisionService
 from .scoring import CandidateScoringService
 from .search import SearchService
+from .spectral import SpectralAnalysisService
 from .staging import StagingPlanService
 from .staging_execution import StagingExecutionService
 from .transfer_execution import TransferExecutionService
@@ -45,6 +46,7 @@ __all__ = [
     "RoutingDecisionService",
     "SafeFileOperationService",
     "SearchService",
+    "SpectralAnalysisService",
     "StagingExecutionService",
     "StagingPlanService",
     "TransferExecutionService",
