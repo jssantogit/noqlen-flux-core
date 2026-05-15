@@ -20,30 +20,24 @@ Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `Downlo
 
 ## Slskd Adapter
 
-`SlskdProvider` under `providers/slskd.py` is an **external adapter**, not Flux core. It implements the generic `SearchProvider` contract and maps slskd-like payloads into Flux-owned models (`SearchCandidate`, `CandidateFile`, `ProviderHealth`).
+`SlskdProvider` under `providers/slskd.py` is an **external adapter**, not Flux core. It implements the generic `SearchProvider`, `QueueExecutionProvider`, and transfer status polling contracts and maps slskd-like payloads into Flux-owned models (`SearchCandidate`, `CandidateFile`, `ProviderHealth`, `TransferStatus`).
 
 - `SlskdProviderConfig` holds optional `base_url`, `api_key` (redacted in serialization), `timeout_seconds`, `max_poll_attempts`, and `allow_network` (default `false`).
-- `SlskdClientProtocol` is an injectable protocol for future network clients with a polling lifecycle: `start_search`, `get_search_state`, `get_search_responses`, `stop_search`, and `health_check`.
+- `SlskdClientProtocol` is an injectable protocol for future network clients with a polling lifecycle: `start_search`, `get_search_state`, `get_search_responses`, `stop_search`, `health_check`, `submit_queue`, and `get_transfer_status`.
 - `SearchState` enum tracks the conceptual search lifecycle: `InProgress`, `Completed`, `Failed`, `Stopped`, `Unknown`.
-- `FakeSlskdClient` simulates the full polling lifecycle for offline tests: immediate completion, delayed completion (InProgress then Completed), timeout/poll-limit exhaustion, failure after N polls, controlled errors, empty responses, locked files, and multi-file album responses.
-- `SlskdHttpClient` is an optional real HTTP client using only `urllib.request`. It supports health checks and search operations (start, poll, retrieve responses, stop). It requires `allow_network=true` and `base_url` to be set. The exact slskd API endpoint paths must be confirmed against the actual slskd version before production use.
-- `SlskdPayloadMapper` contains pure mapping functions that convert slskd-like response dicts into Flux models. It does not access the network, write files, or expose raw payloads. Normalization helpers handle alternative field names from different slskd versions.
+- `FakeSlskdClient` simulates the full polling lifecycle for offline tests: immediate completion, delayed completion (InProgress then Completed), timeout/poll-limit exhaustion, failure after N polls, controlled errors, empty responses, locked files, multi-file album responses, queue submission, and transfer status (queued, downloading, completed, failed).
+- `SlskdHttpClient` is an optional real HTTP client using only `urllib.request`. It supports health checks, search operations, queue submission, and transfer status polling. It requires `allow_network=true` and `base_url` to be set. The exact slskd API endpoint paths must be confirmed against the actual slskd version before production use.
+- `SlskdPayloadMapper` contains pure mapping functions that convert slskd-like response dicts into Flux models. It does not access the network, write files, or expose raw payloads. Includes `map_transfer_status_to_flux()` for transfer status mapping.
 - `SlskdProvider` uses bounded polling via `max_poll_attempts`. Without an injected client and without `allow_network`, it returns `ProviderAvailability.UNAVAILABLE` with "network access disabled". It does **not** perform network calls by default.
-- When `allow_network=true` and `base_url` is set but no client is injected, `SlskdProvider.search()` creates an internal `SlskdHttpClient` and executes the full search lifecycle.
+- When `allow_network=true` and `base_url` is set but no client is injected, `SlskdProvider` creates an internal `SlskdHttpClient` and executes the full lifecycle.
+- Transfer status polling is opt-in: `get_status(transfer_id)` polls the current state of a transfer. Offline/fake clients simulate states (queued, downloading, completed, failed). Real network status requires `--allow-network`.
 - On timeout/poll-limit exhaustion, the provider calls `stop_search` and returns `SearchProviderResult` with `timeout_reached=True` and a warning.
 - Core services do **not** import `providers.slskd`. They depend on `BaseProvider`, `SearchProvider`, and `TransferProvider` contracts only.
 - `SearchService`, `CandidateScoringService`, and `DownloadPlanningService` all work with `SlskdProvider` through the generic `SearchProvider` contract.
 - A future `NativeSoulseekProvider` can implement the same `SlskdClientProtocol` and replace `FakeSlskdClient` or `SlskdHttpClient` without rewriting the core.
-- Real network access is opt-in via `allow_network`. Search is implemented; download, queue, and transfer are not.
-- UI/search surfaces should consume `SearchCandidate` and `SearchProviderResult`, not slskd payloads.
-- The CLI can instantiate `SlskdProvider` directly for search and download planning preview. Core services must NOT import `providers.slskd`.
-- slskd search-to-download planning uses Flux models only. `SearchService` and `DownloadPlanningService` remain provider-agnostic.
-- `DownloadPlan` is a preview, not execution. It never downloads, writes files, or accesses the network.
-- UI/search surfaces can use `SearchCandidate` + `DownloadPlan` for candidate selection.
-- slskd search-to-transfer planning uses Flux models only. `SearchService`, `DownloadPlanningService`, and `TransferPlanningService` remain provider-agnostic.
-- `QueuePlan`/`TransferPlan` is a preview, not execution. It never enqueues, downloads, or transfers.
-- UI/search surfaces can use `SearchCandidate` + `DownloadPlan` + `QueuePlan` for candidate selection and action preview.
-- A future `NativeSoulseekProvider` can implement the same search-to-transfer flow without core changes.
+- Real network access is opt-in via `allow_network`.
+- UI/search surfaces should consume Flux models, not slskd payloads.
+- The CLI can instantiate `SlskdProvider` directly. Core services must NOT import `providers.slskd`.
 
 ## Provider Boundary
 
@@ -111,6 +105,66 @@ Queue plans use `PlannedChange` objects, not `AppliedChange`. Transfer planning 
 A future `slskd` adapter and a future `NativeSoulseekProvider` must both implement the `TransferProvider` contract (`name`, `health()`, `plan_queue()`, `get_status()`) without requiring core changes. The `TransferProvider` contract is generic and provider-neutral.
 
 `TransferPlanningService` does not download files, create files, access the network, call providers, or know about `slskd`. It does not decide quality, routing, quarantine, or deletion. Plans are inherently dry-run; real execution will come in a separate future layer with a provider adapter.
+
+## Transfer Status Polling
+
+Transfer status polling provides opt-in status checks for queued transfers. The `SlskdProvider` implements `get_status(transfer_id)` to poll the current state of a transfer.
+
+- Transfer status polling is opt-in. Default offline mode uses `FakeSlskdClient` with configurable states (queued, downloading, completed, failed).
+- Real network polling requires `--allow-network`, `--url`, `--api-key-env`, and `--transfer-id`.
+- Status responses are mapped to Flux `TransferStatus` models via `SlskdPayloadMapper.map_transfer_status_to_flux()`.
+- Polling is bounded (single call per invocation). No infinite loops.
+- API keys are redacted in all outputs. Raw provider payloads never leak.
+- CLI: `noqlen-flux transfer status slskd --offline --transfer-id ID` (offline, default) or `--allow-network` for real polling.
+- Status polling does not download files, create files, write to filesystem, or perform quality analysis.
+- Transfer status is not quality. It describes the transfer lifecycle, not audio quality.
+
+## Download Artifact Registration
+
+Download artifact registration creates safe, model-based records of completed downloads without reading files, computing checksums, or performing audio analysis.
+
+Flux owns the `DownloadArtifactRegistration` model:
+- `artifact_id` — unique identifier for the artifact.
+- `candidate_id` — source candidate identifier.
+- `queue_item_id` — queue item this artifact came from.
+- `provider` — the provider that completed the transfer (e.g., "slskd").
+- `relative_path` — workspace-relative path to the downloaded file.
+- `state` — completion state (completed, failed, etc.).
+- `size_bytes` — optional file size in bytes.
+- `warnings`, `errors` — transfer-side issues.
+- `metadata` — safe metadata (sensitive keys redacted).
+
+`ArtifactRegistrationService` provides service-level registration:
+- `register_artifact()`: registers a `DownloadArtifactRegistration` (dry-run by default).
+- `register_from_transfer_status()`: creates registration from a `TransferStatus`.
+- `register_from_submission()`: creates registration from a `TransferSubmissionResult`.
+- Dry-run generates `PlannedChange`; apply generates `Artifact` but does NOT write files.
+- No file reading, no checksum computation, no audio analysis.
+- No Forge calls, no provider imports, no network access.
+- Path safety: blocks absolute paths, traversal, dot segments.
+
+Registration is a safe model operation, not a filesystem mutation. Real file creation will come in a future staging layer.
+
+## Download Workspace Safety
+
+Download workspace safety ensures download paths remain confined within the Flux workspace boundary.
+
+`DownloadWorkspaceService` provides download-specific validation:
+- `validate_download_path()`: validates a download relative path is safe and contained.
+- `validate_download_workspace()`: validates the workspace root itself.
+- `ensure_download_directory()`: validates and optionally creates directories (dry-run default).
+
+Safety checks include:
+- Relative paths only: absolute paths are blocked.
+- Traversal markers blocked: `~`, `$`, `{`, `}`, `../`, `..\\`.
+- Dot segments blocked: `./` in paths.
+- Workspace containment: paths must resolve inside the workspace root.
+- Protected roots: paths inside protected roots are blocked.
+- Symlink escape: symlinks that resolve outside the workspace are blocked.
+- Dry-run is the default; apply requires explicit opt-in.
+- No network access, no provider imports, no real music library paths.
+
+Workspace safety does not perform quality analysis, staging, cleanup, or handoff. It only validates that download targets are safe and contained within the Flux workspace.
 
 ## Quality Analysis Foundation
 

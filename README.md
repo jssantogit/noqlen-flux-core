@@ -326,13 +326,68 @@ noqlen-flux transfer execute slskd --artist "Artist" --title "Track" --allow-net
 
 #### Current Limitations
 
-- No real status polling after queue submission.
 - No automatic quality analysis after download.
 - No automatic staging or handoff after transfer.
 - No cleanup or delete operations.
 - No music library filesystem interaction.
-- The slskd adapter is isolated and replaceable by a future `NativeSoulseekProvider`.
+- No real download to filesystem (download artifacts are model-only registration).
+- No audio inspection, ffmpeg, transcode detection, or checksum computation.
+- No Forge integration or handoff manifest auto-generation.
 - `TransferExecutionService` remains provider-agnostic; no central service imports `SlskdProvider`.
+
+## Transfer Status Polling Foundation
+
+Transfer status polling provides opt-in status checks for queued transfers via `SlskdProvider.get_status()`. Default is offline (fake client). Real network polling requires explicit `--allow-network`.
+
+Check transfer status offline (fake client, no network):
+
+```bash
+noqlen-flux transfer status slskd --offline --transfer-id my-transfer-id
+```
+
+Check transfer status with real network (opt-in):
+
+```bash
+noqlen-flux transfer status slskd --allow-network --url http://localhost:5000 --api-key-env NOQLEN_SLSKD_API_KEY --transfer-id my-transfer-id
+```
+
+- Transfer status polling is opt-in: offline by default, bounded (single call per invocation).
+- API key must come from environment variable (`--api-key-env`), never as a literal argument.
+- Status responses are mapped to Flux `TransferStatus` models. Raw slskd payloads never leak.
+- Transfer status is not quality analysis. It describes transfer lifecycle state only.
+- No download of files, no filesystem writes, no staging or handoff occur.
+
+## Download Artifact Registration Foundation
+
+Download artifact registration creates safe, model-based records of completed downloads without reading files or computing checksums.
+
+`DownloadArtifactRegistration` models a completed download with: `artifact_id`, `candidate_id`, `queue_item_id`, `provider`, `relative_path`, `state`, `size_bytes`, `warnings`, `errors`, and safe metadata.
+
+`ArtifactRegistrationService` provides:
+- `register_from_transfer_status()` — registers from a transfer status poll.
+- `register_from_submission()` — registers from a queue submission result.
+- Dry-run by default: generates `PlannedChange`, no filesystem writes.
+- Apply mode: generates logical `Artifact`, but no real file creation.
+- No file reading, no checksum computation, no audio analysis, no Forge calls.
+- Path safety: blocks absolute paths, traversal, dot segments.
+- Safe serialization: sensitive metadata keys (api_key, token, password) are redacted.
+
+## Download Workspace Safety Foundation
+
+Download workspace safety ensures download paths remain confined within the Flux workspace boundary.
+
+`DownloadWorkspaceService` provides:
+- `validate_download_path()` — validates a download path is safe and contained.
+- `validate_download_workspace()` — validates the workspace root.
+- `ensure_download_directory()` — validates + optionally creates directories (dry-run default).
+
+Safety checks:
+- Absolute paths blocked. Path traversal markers blocked. Dot segments blocked.
+- Workspace containment: paths must resolve inside the workspace root.
+- Symlink escape: symlinks resolving outside the workspace are blocked.
+- Protected roots blocked. Real music library paths blocked.
+- Dry-run is default; directory creation requires explicit apply.
+- No network access, no provider imports.
 
 ## Provider Health And Capabilities Foundation
 

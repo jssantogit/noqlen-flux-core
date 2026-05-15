@@ -168,7 +168,54 @@ The `transfer plan slskd` CLI commands transform slskd search results into downl
 - `TransferPlanningService` does not know about slskd; it operates on Flux `DownloadPlan` models only.
 - Output must not contain raw provider payloads, API keys, tokens, headers, or personal absolute paths.
 
-## Search Providers
+## Transfer Status Polling
+
+Transfer status polling provides opt-in status checks for queued transfers. Default mode is offline (fake client only). Real network polling requires explicit `--allow-network`.
+
+Polling safety guarantees:
+- Default offline mode prevents accidental network access.
+- Real network access requires `--allow-network`, `--url`, `--api-key-env`, and `--transfer-id`.
+- API key must come from environment variable (`--api-key-env`), never as a literal argument.
+- API keys are redacted in all outputs (to_dict, repr, error messages).
+- Raw provider payloads never leak into Flux `TransferStatus` models.
+- Polling is bounded (single call per invocation). No infinite polling loops.
+- Status responses do not expose secrets, tokens, credentials, private paths, or backend internals.
+- `TransferStatus` objects must not contain raw provider payloads or sensitive data.
+- Tests use fake clients only; no real network access in automated tests.
+- Transfer status is not quality. It describes transfer lifecycle state only.
+
+## Download Artifact Registration
+
+Download artifact registration creates safe, model-based records of completed downloads. It does not read files, compute checksums, or analyze audio.
+
+Registration safety guarantees:
+- `DownloadArtifactRegistration` is a Flux model with safe serialization. Sensitive metadata keys are redacted.
+- Path safety: blocks absolute paths, path traversal (`..`), dot-only segments (`.`), and unsafe markers.
+- No file reading: registration never opens or reads download files.
+- No checksum computation: no SHA, MD5, or other hash computation.
+- No audio analysis: never calls ffmpeg, transcode detection, or audio inspection.
+- No Forge integration: does not call Forge, create manifests, or perform import.
+- No network access: `ArtifactRegistrationService` does not import or call any provider.
+- Dry-run is the default; apply mode generates logical `Artifact` entries without touching the filesystem.
+- Registration metadata must not contain secrets, tokens, credentials, full lyrics, audio fingerprints, or raw provider payloads.
+
+## Download Workspace Safety
+
+Download workspace safety ensures download paths remain confined within the Flux workspace boundary and do not escape to external directories, protected roots, or real music libraries.
+
+Workspace safety guarantees:
+- Downloads must stay inside the Flux workspace root.
+- Absolute paths are blocked (e.g., `/etc/passwd`, `/home/user/Music`).
+- Path traversal markers are blocked (`~`, `$`, `{`, `}`, `..`).
+- Dot-only segments are blocked (`./`).
+- Symlinks that resolve outside the workspace are blocked.
+- Protected roots are blocked. Paths cannot be inside a protected root.
+- Real music library paths are blocked (absolute paths to music directories).
+- Dry-run is the default; directory creation requires explicit apply.
+- No network access: `DownloadWorkspaceService` does not import or call any provider.
+- No music library interaction: download output is confined to the workspace.
+- Tests use `tmp_path` only; no real filesystem or personal paths.
+- `DownloadWorkspaceService` does not perform quality analysis, staging, cleanup, or handoff.
 
 Automated search tests must use fake providers or controlled fixtures. Real network access, real `slskd`, native Soulseek sessions, credentials, live provider APIs, and real downloads are prohibited in automated search tests.
 
