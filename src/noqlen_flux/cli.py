@@ -295,7 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_execute_mode.add_argument("--apply", action="store_true", help="Submit to fake provider (in-memory)")
     transfer_execute_fake.set_defaults(func=run_transfer_execute_fake)
 
-    transfer_execute_slskd = transfer_execute_subparsers.add_parser("slskd", help="Preview slskd queue execution (offline/fake only)")
+    transfer_execute_slskd = transfer_execute_subparsers.add_parser("slskd", help="Execute slskd queue submission (offline by default, real network opt-in)")
     transfer_execute_slskd.add_argument("--artist", required=True, help="Artist name")
     transfer_execute_slskd.add_argument("--title", required=True, help="Track title")
     transfer_execute_slskd.add_argument("--score", action="store_true", help="Include pre-download scoring")
@@ -304,11 +304,26 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_execute_slskd.add_argument("--duplicate", action="store_true", help="Simulate duplicate scenario")
     transfer_execute_slskd.add_argument("--provider-error", action="store_true", help="Simulate provider error scenario")
     transfer_execute_slskd.add_argument("--unavailable", action="store_true", help="Simulate unavailable scenario")
-    transfer_execute_slskd.add_argument("--offline", action="store_true", help="Force offline mode (default, always enforced)")
+    transfer_execute_slskd.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    transfer_execute_slskd.add_argument("--allow-network", action="store_true", help="Allow real network access for queue submission (opt-in)")
+    transfer_execute_slskd.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    transfer_execute_slskd.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
     transfer_execute_slskd_mode = transfer_execute_slskd.add_mutually_exclusive_group()
     transfer_execute_slskd_mode.add_argument("--dry-run", action="store_true", help="Preview execution without submitting (default)")
-    transfer_execute_slskd_mode.add_argument("--apply", action="store_true", help="Simulate submit to fake slskd client (in-memory)")
+    transfer_execute_slskd_mode.add_argument("--apply", action="store_true", help="Submit queue to provider")
     transfer_execute_slskd.set_defaults(func=run_transfer_execute_slskd)
+
+    transfer_status = transfer_subparsers.add_parser("status", help="Poll transfer status via provider")
+    transfer_status_subparsers = transfer_status.add_subparsers(dest="transfer_status_provider")
+
+    transfer_status_slskd = transfer_status_subparsers.add_parser("slskd", help="Poll slskd transfer status (offline by default, real network opt-in)")
+    transfer_status_slskd.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    transfer_status_slskd.add_argument("--allow-network", action="store_true", help="Allow real network access for transfer status polling (opt-in)")
+    transfer_status_slskd.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    transfer_status_slskd.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    transfer_status_slskd.add_argument("--transfer-id", required=True, help="Transfer identifier to poll")
+    transfer_status_slskd.add_argument("--queue-item-id", help="Optional queue item identifier")
+    transfer_status_slskd.set_defaults(func=run_transfer_status_slskd)
 
     provider = subparsers.add_parser("provider", help="Inspect provider health and capabilities")
     provider_subparsers = provider.add_subparsers(dest="provider_command")
@@ -1006,36 +1021,74 @@ def run_transfer_execute_fake(args: argparse.Namespace) -> int:
 
 
 def run_transfer_execute_slskd(args: argparse.Namespace) -> int:
-    """Preview slskd queue execution using offline/fake client only.
+    """Execute slskd queue submission.
 
-    No real network, no real downloads, no real queue operations.
-    This is a controlled simulation for preview and testing.
+    Offline/fake mode is the default. Real network access requires
+    --allow-network, --apply, --url, and --api-key-env.
     """
-    from noqlen_flux.providers.slskd import FakeSlskdClient, SlskdProvider
+    from noqlen_flux.providers.slskd import FakeSlskdClient, SlskdHttpClient, SlskdProvider, SlskdProviderConfig
 
     query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title)
+
+    allow_network = getattr(args, "allow_network", False)
+    is_apply = getattr(args, "apply", False)
+    is_offline = getattr(args, "offline", False) or not allow_network
 
     queue_failures = getattr(args, "provider_error", False)
     queue_duplicate = getattr(args, "duplicate", False)
     queue_locked = getattr(args, "locked", False)
     queue_unavailable = getattr(args, "unavailable", False)
 
-    fake_client = FakeSlskdClient(
-        responses=[{
-            "responses": [{
-                "username": "fake-user",
-                "directory": "Example Artist/Example Album",
-                "files": [{"filename": "Example Track.flac", "size": 12345678, "extension": "flac"}],
-                "locked_files": [],
-            }],
-            "response_count": 1,
-        }],
-        queue_simulate_failures=queue_failures,
-        queue_simulate_duplicate=queue_duplicate,
-        queue_simulate_locked=queue_locked,
-        queue_simulate_provider_unavailable=queue_unavailable,
-    )
-    provider = SlskdProvider(client=fake_client)
+    if is_offline or not allow_network:
+        provider = _build_offline_slskd_provider(
+            queue_failures=queue_failures,
+            queue_duplicate=queue_duplicate,
+            queue_locked=queue_locked,
+            queue_unavailable=queue_unavailable,
+        )
+    else:
+        url = getattr(args, "url", None)
+        api_key_env = getattr(args, "api_key_env", None)
+
+        if not url:
+            result = FluxResult(
+                operation=TransferExecutionService.operation,
+                status=Status.FAILED,
+                errors=[FluxError(code="missing-url", message="real queue submission requires --url when --allow-network is set")],
+            )
+            print(_render_result(result))
+            return 1
+
+        if not api_key_env:
+            result = FluxResult(
+                operation=TransferExecutionService.operation,
+                status=Status.FAILED,
+                errors=[FluxError(code="missing-api-key-env", message="real queue submission requires --api-key-env when --allow-network is set")],
+            )
+            print(_render_result(result))
+            return 1
+
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            result = FluxResult(
+                operation=TransferExecutionService.operation,
+                status=Status.FAILED,
+                errors=[FluxError(code="empty-api-key", message=f"environment variable {api_key_env} is not set or empty")],
+            )
+            print(_render_result(result))
+            return 1
+
+        timeout = getattr(args, "timeout", None) or 5
+        max_polls = getattr(args, "max_polls", None) or 10
+
+        config = SlskdProviderConfig(
+            base_url=url,
+            api_key=api_key,
+            allow_network=True,
+            timeout_seconds=timeout,
+            max_poll_attempts=max_polls,
+        )
+        provider = SlskdProvider(config=config)
 
     provider_result = provider.search(query)
     if not provider_result.candidates:
@@ -1112,7 +1165,7 @@ def run_transfer_execute_slskd(args: argparse.Namespace) -> int:
         )
 
     mode = TransferExecutionMode.DRY_RUN
-    if getattr(args, "apply", False):
+    if is_apply:
         mode = TransferExecutionMode.APPLY
 
     allow_provider_queue = mode == TransferExecutionMode.APPLY
@@ -1126,6 +1179,109 @@ def run_transfer_execute_slskd(args: argparse.Namespace) -> int:
     result = exec_service.execute_queue(request, provider)
     print(_render_result(result))
     return _exit_code(result.status)
+
+
+def run_transfer_status_slskd(args: argparse.Namespace) -> int:
+    """Poll slskd transfer status.
+
+    Offline/fake mode is the default. Real network access requires
+    --allow-network, --url, and --api-key-env.
+    """
+    from noqlen_flux.providers.slskd import SlskdProvider, SlskdProviderConfig
+    from noqlen_flux.results import FluxResult, Status, FluxError, Artifact
+
+    transfer_id = args.transfer_id
+    queue_item_id = getattr(args, "queue_item_id", None)
+    allow_network = getattr(args, "allow_network", False)
+
+    if not allow_network:
+        from noqlen_flux.providers.slskd import FakeSlskdClient
+
+        transfer_state = "completed"
+        fake_client = FakeSlskdClient(transfer_state=transfer_state)
+        provider = SlskdProvider(client=fake_client)
+    else:
+        url = getattr(args, "url", None)
+        api_key_env = getattr(args, "api_key_env", None)
+
+        if not url:
+            print(_render_result(FluxResult(
+                operation="transfer-status",
+                status=Status.FAILED,
+                errors=[FluxError(code="missing-url", message="real transfer status requires --url when --allow-network is set")],
+            )))
+            return 1
+
+        if not api_key_env:
+            print(_render_result(FluxResult(
+                operation="transfer-status",
+                status=Status.FAILED,
+                errors=[FluxError(code="missing-api-key-env", message="real transfer status requires --api-key-env when --allow-network is set")],
+            )))
+            return 1
+
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            print(_render_result(FluxResult(
+                operation="transfer-status",
+                status=Status.FAILED,
+                errors=[FluxError(code="empty-api-key", message=f"environment variable {api_key_env} is not set or empty")],
+            )))
+            return 1
+
+        config = SlskdProviderConfig(
+            base_url=url,
+            api_key=api_key,
+            allow_network=True,
+        )
+        provider = SlskdProvider(config=config)
+
+    status = provider.get_status(transfer_id, queue_item_id=queue_item_id)
+
+    result = FluxResult(
+        operation="transfer-status",
+        status=Status.SUCCESS if not status.errors else Status.FAILED,
+        summary={
+            "transfer_id": status.transfer_id,
+            "queue_item_id": status.queue_item_id,
+            "state": status.state.value,
+            "progress_percent": status.progress_percent,
+            "bytes_transferred": status.bytes_transferred,
+            "total_bytes": status.total_bytes,
+        },
+        warnings=[FluxWarning(code="status-warning", message=w) for w in status.warnings],
+        errors=[FluxError(code="status-error", message=e) for e in status.errors],
+        artifacts=[Artifact(kind="transfer-status", description=f"Transfer status: {status.state.value}")],
+    )
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def _build_offline_slskd_provider(
+    *,
+    queue_failures: bool = False,
+    queue_duplicate: bool = False,
+    queue_locked: bool = False,
+    queue_unavailable: bool = False,
+) -> SlskdProvider:
+    from noqlen_flux.providers.slskd import FakeSlskdClient, SlskdProvider
+
+    fake_client = FakeSlskdClient(
+        responses=[{
+            "responses": [{
+                "username": "fake-user",
+                "directory": "Example Artist/Example Album",
+                "files": [{"filename": "Example Track.flac", "size": 12345678, "extension": "flac"}],
+                "locked_files": [],
+            }],
+            "response_count": 1,
+        }],
+        queue_simulate_failures=queue_failures,
+        queue_simulate_duplicate=queue_duplicate,
+        queue_simulate_locked=queue_locked,
+        queue_simulate_provider_unavailable=queue_unavailable,
+    )
+    return SlskdProvider(client=fake_client)
 
 
 def run_provider_inspect(args: argparse.Namespace) -> int:

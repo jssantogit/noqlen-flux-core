@@ -274,6 +274,66 @@ Planning supports priority selection via `--priority` (low, normal, high) and op
 
 There is no real transfer, no network access, no `slskd`, no filesystem write, and no music library interaction. Real execution will come in a separate future commit with an isolated `TransferProvider` adapter.
 
+## Transfer Queue Execution Foundation
+
+Transfer queue execution submits planned queue items to a provider for transfer. The CLI supports both offline/fake simulation and opt-in real network submission via `SlskdProvider`.
+
+### Offline / Fake Queue Execution (Default)
+
+Offline mode is the default. No network access occurs. The fake client simulates queue submission entirely in memory.
+
+Preview queue execution without submitting:
+
+```bash
+noqlen-flux transfer execute slskd --artist "Example Artist" --title "Example Track" --offline --dry-run
+```
+
+Simulate queue submission to the fake client (in-memory only):
+
+```bash
+noqlen-flux transfer execute slskd --artist "Example Artist" --title "Example Track" --offline --apply
+```
+
+Simulation flags are available for testing controlled scenarios: `--locked`, `--duplicate`, `--provider-error`, `--unavailable`.
+
+### Real Queue Execution (Opt-In)
+
+Real queue submission requires **all** of the following flags:
+
+- `--allow-network` — enables real HTTP communication with the slskd backend.
+- `--apply` — allows actual queue submission (dry-run is the default).
+- `--url` — the slskd base URL.
+- `--api-key-env` — the name of an environment variable containing the slskd API key. The API key is **never** accepted as a literal argument and is **never** printed in output, errors, or metadata.
+
+Example:
+
+```bash
+export SLSKD_API_KEY="your-key-here"
+noqlen-flux transfer execute slskd --artist "Artist" --title "Track" --allow-network --apply --url http://localhost:5000 --api-key-env SLSKD_API_KEY
+```
+
+#### Safety Gating
+
+| Condition | Behavior |
+|-----------|----------|
+| Without `--allow-network` | No network access; uses fake client only |
+| Without `--apply` | Dry-run only; no queue submission |
+| Without `--api-key-env` | Blocked with safe error message |
+| Without `--url` | Blocked with safe error message |
+| `allow_network` default | `false` |
+| `allow_provider_queue` default | `false` |
+| `require_explicit_apply` default | `true` |
+
+#### Current Limitations
+
+- No real status polling after queue submission.
+- No automatic quality analysis after download.
+- No automatic staging or handoff after transfer.
+- No cleanup or delete operations.
+- No music library filesystem interaction.
+- The slskd adapter is isolated and replaceable by a future `NativeSoulseekProvider`.
+- `TransferExecutionService` remains provider-agnostic; no central service imports `SlskdProvider`.
+
 ## Provider Health And Capabilities Foundation
 
 Flux owns generic provider status models that describe availability, capabilities, and operational state without referencing any specific backend. All providers implement a shared `BaseProvider` contract: `name`, `capabilities()`, and `health()`.

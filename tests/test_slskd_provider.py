@@ -929,6 +929,248 @@ def test_slskd_http_client_health_mocked(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result["version"] == "4.5.0"
 
 
+# --- SlskdHttpClient.submit_queue tests ---
+
+
+def test_slskd_http_client_submit_queue_no_url_raises() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    with pytest.raises(RuntimeError, match="no base_url"):
+        client.submit_queue({"items": []})
+
+
+def test_slskd_http_client_submit_queue_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="test-key")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    captured_method = []
+    captured_body = []
+
+    def fake_urlopen(req, timeout=None):
+        captured_method.append(req.method)
+        captured_body.append(req.data)
+        return FakeResponse(b'{"id": "transfer-123", "state": "Queued"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    payload = {
+        "queue_id": "q-1",
+        "request_id": "r-1",
+        "items": [{"username": "user1", "filename": "track.flac"}],
+    }
+    result = client.submit_queue(payload)
+
+    assert captured_method == ["POST"]
+    assert result["submission_id"] == "transfer-123"
+    assert result["state"] == "queued"
+
+
+def test_slskd_http_client_submit_queue_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="queue submission failed"):
+        client.submit_queue({"items": []})
+
+
+def test_slskd_http_client_submit_queue_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="queue submission timed out"):
+        client.submit_queue({"items": []})
+
+
+def test_slskd_http_client_submit_queue_api_key_not_in_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="super-secret-key-12345")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.submit_queue({"items": []})
+    assert "super-secret-key-12345" not in str(exc_info.value)
+
+
+def test_slskd_http_client_submit_queue_sends_api_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="my-api-key")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    captured_headers = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured_headers.update(dict(req.headers))
+        return FakeResponse(b'{"id": "t-1", "state": "Queued"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    client.submit_queue({"items": []})
+    header_value = captured_headers.get("X-Api-Key") or captured_headers.get("X-api-key")
+    assert header_value == "my-api-key"
+
+
+def test_slskd_http_client_submit_queue_uses_correct_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    captured_url = []
+
+    def fake_urlopen(req, timeout=None):
+        captured_url.append(req.full_url)
+        return FakeResponse(b'{"id": "t-1", "state": "Queued"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    client.submit_queue({"items": []})
+    assert captured_url[0] == "http://localhost:5000/api/v1/transfers"
+
+
+def test_slskd_http_client_submit_queue_normalizes_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    response_body = json.dumps({
+        "id": "transfer-abc",
+        "state": "Queued",
+        "items": [
+            {"id": "item-1", "state": "Queued", "message": "queued track.flac"},
+        ],
+    }).encode()
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(response_body)
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.submit_queue({"items": [{"filename": "track.flac"}]})
+    assert result["submission_id"] == "transfer-abc"
+    assert result["state"] == "queued"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["queue_item_id"] == "item-1"
+    assert result["items"][0]["state"] == "queued"
+
+
+def test_slskd_http_client_submit_queue_maps_completed_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(b'{"id": "t-1", "state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.submit_queue({"items": []})
+    assert result["state"] == "complete"
+
+
+def test_slskd_http_client_submit_queue_maps_failed_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(b'{"id": "t-1", "state": "Failed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.submit_queue({"items": []})
+    assert result["state"] == "failed"
+
+
 # --- Provider search with allow_network ---
 
 
@@ -1203,6 +1445,7 @@ from noqlen_flux.transfers import (
     TransferExecutionRequest,
     TransferItem,
     TransferPriority,
+    TransferState,
     TransferSubmissionState,
 )
 
@@ -1579,6 +1822,148 @@ def test_fake_slskd_client_queue_submissions_stored() -> None:
     assert len(client.queue_submissions) == 1
 
 
+def test_slskd_provider_submit_queue_with_allow_network_uses_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(
+        base_url="http://localhost:5000",
+        allow_network=True,
+        api_key="test-key",
+    )
+    provider = SlskdProvider(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "id": "transfer-1",
+            "state": "Queued",
+            "items": [{"id": "qi-0", "state": "Queued", "message": "queued Track 0.flac"}],
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+
+    assert result.state == TransferSubmissionState.SUCCESS
+    assert len(result.items) == 1
+    assert result.items[0].state == TransferSubmissionState.SUBMITTED
+
+
+def test_slskd_provider_submit_queue_allow_network_false_blocks_real_submit() -> None:
+    config = SlskdProviderConfig(allow_network=False)
+    provider = SlskdProvider(config=config)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.UNAVAILABLE
+    assert result.blocked is True
+
+
+def test_slskd_provider_submit_queue_http_error_returns_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True)
+    provider = SlskdProvider(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+
+    assert result.state == TransferSubmissionState.PROVIDER_ERROR
+    assert result.blocked is True
+
+
+def test_slskd_provider_submit_queue_timeout_returns_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True)
+    provider = SlskdProvider(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+
+    assert result.state == TransferSubmissionState.PROVIDER_ERROR
+    assert result.blocked is True
+
+
+def test_slskd_provider_submit_queue_api_key_not_in_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(
+        base_url="http://localhost:5000",
+        allow_network=True,
+        api_key="super-secret-api-key-xyz",
+    )
+    provider = SlskdProvider(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+
+    result_str = str(result.to_dict())
+    assert "super-secret-api-key-xyz" not in result_str
+    assert "super-secret-api-key-xyz" not in " ".join(result.block_reasons)
+    assert "super-secret-api-key-xyz" not in " ".join(result.errors)
+
+
+def test_slskd_provider_submit_queue_raw_response_not_in_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True)
+    provider = SlskdProvider(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "id": "transfer-1",
+            "state": "Queued",
+            "items": [{"id": "qi-0", "state": "Queued"}],
+            "rawInternalField": "should-not-leak",
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+
+    result_dict = result.to_dict()
+    assert "rawInternalField" not in str(result_dict)
+    assert "rawInternalField" not in str(result.metadata)
+
+
 def test_slskd_queue_payload_does_not_leak_raw_payload() -> None:
     plan = _fake_queue_plan()
     request = _fake_execution_request(plan)
@@ -1612,6 +1997,45 @@ def test_transfer_execution_service_can_use_slskd_provider_via_interface() -> No
     assert len(result.planned_changes) > 0
 
 
+def test_transfer_execution_service_with_slskd_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.services.transfer_execution import TransferExecutionService
+
+    config = SlskdProviderConfig(
+        base_url="http://localhost:5000",
+        allow_network=True,
+        api_key="test-key",
+    )
+    provider = SlskdProvider(config=config)
+    service = TransferExecutionService()
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "id": "transfer-1",
+            "state": "Queued",
+            "items": [{"id": "qi-0", "state": "Queued", "message": "queued Track 0.flac"}],
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    plan = _fake_queue_plan()
+    request = service.build_execution_request(
+        plan, mode=TransferExecutionMode.DRY_RUN, allow_provider_queue=True,
+    )
+    result = service.execute_queue(request, provider)
+    assert result.status.value in ("success", "warning")
+    assert len(result.planned_changes) > 0
+
+
 def test_fake_queue_execution_provider_still_works() -> None:
     from noqlen_flux.providers.fake_queue_execution import FakeQueueExecutionProvider
 
@@ -1636,3 +2060,354 @@ def test_no_central_service_imports_slskd_queue() -> None:
             obj = getattr(mod, attr_name, None)
             if hasattr(obj, "__module__"):
                 assert "slskd" not in (getattr(obj, "__module__", "") or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Transfer status polling tests
+# ---------------------------------------------------------------------------
+
+
+def test_fake_slskd_client_get_transfer_status_default_queued() -> None:
+    client = FakeSlskdClient()
+    status = client.get_transfer_status("transfer-1")
+    assert status["transfer_id"] == "transfer-1"
+    assert status["state"] == "queued"
+    assert status["progress_percent"] == 0.0
+
+
+def test_fake_slskd_client_get_transfer_status_completed() -> None:
+    client = FakeSlskdClient(transfer_state="completed")
+    status = client.get_transfer_status("transfer-1")
+    assert status["state"] == "completed"
+    assert status["progress_percent"] == 100.0
+    assert status["bytes_transferred"] == 12345678
+
+
+def test_fake_slskd_client_get_transfer_status_downloading() -> None:
+    client = FakeSlskdClient(transfer_state="downloading")
+    status = client.get_transfer_status("transfer-1")
+    assert status["state"] == "downloading"
+    assert status["progress_percent"] == 72.3
+    assert status["bytes_transferred"] > 0
+
+
+def test_fake_slskd_client_get_transfer_status_failed() -> None:
+    client = FakeSlskdClient(transfer_state="failed")
+    status = client.get_transfer_status("transfer-1")
+    assert status["state"] == "failed"
+    assert status["progress_percent"] == 0.0
+    assert len(status["errors"]) > 0
+
+
+def test_fake_slskd_client_get_transfer_status_error_raises() -> None:
+    client = FakeSlskdClient(raise_on_transfer_status=True)
+    with pytest.raises(RuntimeError, match="get_transfer_status error"):
+        client.get_transfer_status("transfer-1")
+
+
+def test_fake_slskd_client_set_transfer_state() -> None:
+    client = FakeSlskdClient(transfer_state="queued")
+    client.set_transfer_state("transfer-1", "completed")
+    status = client.get_transfer_status("transfer-1")
+    assert status["state"] == "completed"
+
+
+def test_slskd_provider_get_status_no_client_returns_failed() -> None:
+    provider = SlskdProvider()
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "failed"
+    assert len(status.errors) >= 1
+    assert "no active client" in " ".join(status.errors).lower()
+
+
+def test_slskd_provider_get_status_with_fake_client_queued() -> None:
+    client = FakeSlskdClient(transfer_state="queued")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "queued"
+    assert status.progress_percent == 0.0
+    assert status.transfer_id == "transfer-1"
+
+
+def test_slskd_provider_get_status_with_fake_client_completed() -> None:
+    client = FakeSlskdClient(transfer_state="completed")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "completed"
+    assert status.progress_percent == 100.0
+
+
+def test_slskd_provider_get_status_with_fake_client_downloading() -> None:
+    client = FakeSlskdClient(transfer_state="downloading")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "running"
+
+
+def test_slskd_provider_get_status_with_fake_client_failed() -> None:
+    client = FakeSlskdClient(transfer_state="failed")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "failed"
+    assert len(status.errors) > 0
+
+
+def test_slskd_provider_get_status_with_queue_item_id() -> None:
+    client = FakeSlskdClient(transfer_state="completed")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1", queue_item_id="qi-42")
+    assert status.transfer_id == "transfer-1"
+    assert status.queue_item_id == "qi-42"
+
+
+def test_slskd_provider_get_status_api_key_not_in_result() -> None:
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="super-secret-key")
+    provider = SlskdProvider(config=config, client=FakeSlskdClient(transfer_state="completed"))
+    status = provider.get_status("transfer-1")
+    status_dict = status.to_dict()
+    assert "super-secret-key" not in str(status_dict)
+    assert "super-secret-key" not in str(status.metadata)
+
+
+def test_slskd_provider_get_status_raw_response_not_leaked() -> None:
+    client = FakeSlskdClient(transfer_state="completed")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    status_dict = status.to_dict()
+    assert "raw_provider_payload" not in str(status_dict)
+    assert "raw_response" not in str(status_dict)
+
+
+def test_slskd_provider_get_status_offline_no_network_access() -> None:
+    client = FakeSlskdClient(transfer_state="completed")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "completed"
+
+
+def test_slskd_http_client_get_transfer_status_no_url_raises() -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig()
+    client = SlskdHttpClient(config=config)
+    with pytest.raises(RuntimeError, match="no base_url"):
+        client.get_transfer_status("transfer-1")
+
+
+def test_slskd_http_client_get_transfer_status_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="test-key")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "id": "transfer-1",
+            "state": "Completed",
+            "progressPercent": 100.0,
+            "bytesTransferred": 12345678,
+            "totalBytes": 12345678,
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.get_transfer_status("transfer-1")
+    assert result["transfer_id"] == "transfer-1"
+    assert result["state"] == "completed"
+    assert result["progress_percent"] == 100.0
+
+
+def test_slskd_http_client_get_transfer_status_downloading_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "state": "InProgress",
+            "progress_percent": 45.5,
+            "bytes_transferred": 5617280,
+            "total_bytes": 12345678,
+            "speed_bytes_per_second": 524288.0,
+            "eta_seconds": 12.8,
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.get_transfer_status("transfer-1")
+    assert result["state"] == "inprogress"
+    assert result["progress_percent"] == 45.5
+    assert result["speed_bytes_per_second"] == 524288.0
+    assert result["eta_seconds"] == 12.8
+
+
+def test_slskd_http_client_get_transfer_status_failed_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "state": "Failed",
+            "progressPercent": 15.0,
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    result = client.get_transfer_status("transfer-1")
+    assert result["state"] == "failed"
+
+
+def test_slskd_http_client_get_transfer_status_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="transfer status check failed"):
+        client.get_transfer_status("transfer-1")
+
+
+def test_slskd_http_client_get_transfer_status_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="transfer status check timed out"):
+        client.get_transfer_status("transfer-1")
+
+
+def test_slskd_http_client_get_transfer_status_api_key_not_in_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noqlen_flux.providers.slskd import SlskdHttpClient
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", api_key="super-secret-key-12345")
+    client = SlskdHttpClient(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.get_transfer_status("transfer-1")
+    assert "super-secret-key-12345" not in str(exc_info.value)
+
+
+def test_slskd_provider_declares_transfer_status_capability() -> None:
+    provider = SlskdProvider()
+    caps = provider.capabilities()
+    assert ProviderCapability.TRANSFER_STATUS in caps
+
+
+def test_slskd_provider_get_status_with_allow_network_uses_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(
+        base_url="http://localhost:5000",
+        allow_network=True,
+        api_key="test-key",
+    )
+    provider = SlskdProvider(config=config)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse(json.dumps({
+            "state": "Completed",
+            "progressPercent": 100.0,
+        }).encode())
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "completed"
+    assert status.progress_percent == 100.0
+
+
+def test_slskd_provider_get_status_http_error_returns_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.error import URLError
+
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True)
+    provider = SlskdProvider(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "failed"
+    assert len(status.errors) > 0
+
+
+def test_slskd_provider_get_status_timeout_returns_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SlskdProviderConfig(base_url="http://localhost:5000", allow_network=True)
+    provider = SlskdProvider(config=config)
+
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    status = provider.get_status("transfer-1")
+    assert status.state.value == "failed"
+    assert len(status.errors) > 0
+
+
+def test_get_transfer_status_is_bounded_not_infinite() -> None:
+    client = FakeSlskdClient(transfer_state="completed")
+    provider = SlskdProvider(client=client)
+    status = provider.get_status("transfer-1")
+    assert status.state is not TransferState.UNKNOWN
+    assert status.transfer_id == "transfer-1"

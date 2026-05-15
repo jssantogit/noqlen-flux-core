@@ -6,6 +6,11 @@ central Flux service. Core services must NOT import this module.
 
 A future NativeSoulseekProvider can implement the same contracts
 without rewriting the core.
+
+Capabilities implemented:
+- SearchProvider (search)
+- QueueExecutionProvider (submit_queue)
+- TransferProvider (get_status - transfer status polling)
 """
 
 from __future__ import annotations
@@ -41,6 +46,8 @@ from noqlen_flux.transfers import (
     TransferExecutionMode,
     TransferExecutionRequest,
     TransferItem,
+    TransferState,
+    TransferStatus,
     TransferSubmissionItem,
     TransferSubmissionResult,
     TransferSubmissionState,
@@ -176,6 +183,8 @@ class FakeSlskdClient:
         queue_simulate_user_offline: bool = False,
         queue_simulate_invalid_item: bool = False,
         queue_simulate_provider_unavailable: bool = False,
+        transfer_state: str = "queued",
+        raise_on_transfer_status: bool = False,
     ) -> None:
         self._responses = list(responses or [])
         self._healthy = healthy
@@ -193,6 +202,9 @@ class FakeSlskdClient:
         self._queue_simulate_invalid_item = queue_simulate_invalid_item
         self._queue_simulate_provider_unavailable = queue_simulate_provider_unavailable
         self._queue_submissions: list[dict[str, Any]] = []
+        self._transfer_states: dict[str, str] = {}
+        self._transfer_state = transfer_state
+        self._raise_on_transfer_status = raise_on_transfer_status
 
     def start_search(self, query_text: str) -> str:
         if self._raise_on_start:
@@ -244,6 +256,29 @@ class FakeSlskdClient:
         )
         self._queue_submissions.append(result)
         return result
+
+    def get_transfer_status(self, transfer_id: str) -> dict[str, Any]:
+        """Simulate a transfer status response.
+
+        Returns a dict with state and optional progress fields.
+        transfer_state controls the simulated state: queued, downloading, completed, failed.
+        """
+        if self._raise_on_transfer_status:
+            raise RuntimeError("fake client: get_transfer_status error")
+
+        if transfer_id not in self._transfer_states:
+            self._transfer_states[transfer_id] = self._transfer_state
+
+        current_state = self._transfer_states[transfer_id]
+
+        if current_state in ("downloading", "inprogress"):
+            self._transfer_states[transfer_id] = "completed"
+
+        return _simulate_transfer_status(transfer_id, current_state)
+
+    def set_transfer_state(self, transfer_id: str, state: str) -> None:
+        """Configure the simulated transfer state for a specific transfer."""
+        self._transfer_states[transfer_id] = state
 
     @property
     def poll_count(self) -> int:
@@ -418,11 +453,130 @@ class SlskdHttpClient:
         except (URLError, TimeoutError, OSError):
             pass
 
+    def submit_queue(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Submit a queue transfer request to the slskd API.
+
+        Endpoint path must be confirmed against actual slskd API.
+        Uses only the Python standard library (urllib.request).
+        API keys are never exposed in error messages or metadata.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            raise RuntimeError("slskd client: no base_url configured")
+
+        url = f"{base_url.rstrip('/')}/api/v1/transfers"
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        body = json.dumps(payload).encode("utf-8")
+        req = Request(url, data=body, headers=headers, method="POST")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds) as resp:
+                raw = resp.read()
+                data = json.loads(raw)
+                return _normalize_queue_submission_response(data, payload)
+        except URLError as exc:
+            reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+            raise RuntimeError(f"slskd client: queue submission failed: {reason}") from exc
+        except TimeoutError:
+            raise RuntimeError("slskd client: queue submission timed out") from None
+        except OSError as exc:
+            raise RuntimeError("slskd client: queue submission network error") from exc
+
+    def get_transfer_status(self, transfer_id: str) -> dict[str, Any]:
+        """Return the current status of a transfer from the slskd API.
+
+        Endpoint path must be confirmed against actual slskd API.
+        Uses only the Python standard library (urllib.request).
+        API keys are never exposed in error messages or metadata.
+        """
+        base_url = self._config.base_url
+        if not base_url:
+            raise RuntimeError("slskd client: no base_url configured")
+
+        url = f"{base_url.rstrip('/')}/api/v1/transfers/{_url_quote(transfer_id)}"
+        headers: dict[str, str] = {}
+        if self._config.api_key:
+            headers["X-Api-Key"] = self._config.api_key
+
+        req = Request(url, headers=headers, method="GET")
+
+        try:
+            with urlopen(req, timeout=self._config.timeout_seconds) as resp:
+                raw = resp.read()
+                data = json.loads(raw)
+                return _normalize_transfer_status_response(data, transfer_id)
+        except URLError as exc:
+            reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+            raise RuntimeError(f"slskd client: transfer status check failed: {reason}") from exc
+        except TimeoutError:
+            raise RuntimeError("slskd client: transfer status check timed out") from None
+        except OSError as exc:
+            raise RuntimeError("slskd client: transfer status check network error") from exc
+
 
 def _url_quote(value: str) -> str:
     """URL-safe quote for search IDs."""
     from urllib.parse import quote
     return quote(value, safe="")
+
+
+def _normalize_transfer_status_response(
+    raw_response: dict[str, Any],
+    transfer_id: str,
+) -> dict[str, Any]:
+    """Normalize a raw slskd transfer status HTTP response to a Flux-expected format.
+
+    Extracts state, progress, bytes, speed, ETA from slskd-like responses.
+    Never exposes sensitive data or raw provider payloads.
+    """
+    state = raw_response.get("state") or raw_response.get("status") or ""
+    if isinstance(state, str):
+        state = state.lower().strip()
+
+    progress = raw_response.get("progressPercent") or raw_response.get("progress_percent") or raw_response.get("progress")
+    if isinstance(progress, (int, float)):
+        progress_pct = float(progress)
+    else:
+        progress_pct = None
+
+    bytes_transferred = raw_response.get("bytesTransferred") or raw_response.get("bytes_transferred") or raw_response.get("bytes")
+    if isinstance(bytes_transferred, (int, float)) and bytes_transferred >= 0:
+        bytes_transferred = int(bytes_transferred)
+    else:
+        bytes_transferred = None
+
+    total_bytes = raw_response.get("totalBytes") or raw_response.get("total_bytes") or raw_response.get("size")
+    if isinstance(total_bytes, (int, float)) and total_bytes >= 0:
+        total_bytes = int(total_bytes)
+    else:
+        total_bytes = None
+
+    speed = raw_response.get("speedBytesPerSecond") or raw_response.get("speed_bytes_per_second") or raw_response.get("speed")
+    if isinstance(speed, (int, float)):
+        speed_bps = float(speed)
+    else:
+        speed_bps = None
+
+    eta = raw_response.get("etaSeconds") or raw_response.get("eta_seconds") or raw_response.get("eta")
+    if isinstance(eta, (int, float)):
+        eta_s = float(eta)
+    else:
+        eta_s = None
+
+    return {
+        "transfer_id": transfer_id,
+        "state": state,
+        "progress_percent": progress_pct,
+        "bytes_transferred": bytes_transferred,
+        "total_bytes": total_bytes,
+        "speed_bytes_per_second": speed_bps,
+        "eta_seconds": eta_s,
+        "warnings": [],
+        "errors": [],
+    }
 
 
 def _safe_summary(data: dict[str, Any], max_keys: int = 5) -> dict[str, Any]:
@@ -442,6 +596,92 @@ def _safe_summary(data: dict[str, Any], max_keys: int = 5) -> dict[str, Any]:
         else:
             summary[k] = str(v)
     return summary
+
+
+def _normalize_queue_submission_response(
+    raw_response: dict[str, Any],
+    original_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize a raw slskd queue submission HTTP response to a Flux-expected format.
+
+    Maps slskd-like transfer response to the structure expected by
+    SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result.
+    Never exposes sensitive data or raw provider payloads.
+    """
+    submission_id = raw_response.get("id") or raw_response.get("transferId") or str(uuid.uuid4())
+
+    raw_state = raw_response.get("state") or raw_response.get("status") or ""
+    normalized_state = _map_slskd_transfer_state_to_queue_state(raw_state)
+
+    raw_items = raw_response.get("items") or raw_response.get("files") or []
+    if not isinstance(raw_items, list):
+        raw_items = [raw_items] if raw_items else []
+
+    normalized_items = []
+    for idx, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            continue
+        normalized_items.append({
+            "queue_item_id": raw_item.get("id") or raw_item.get("transferId") or f"slskd-qi-{idx}",
+            "state": _map_slskd_transfer_state_to_queue_state(
+                raw_item.get("state") or raw_item.get("status") or normalized_state,
+            ),
+            "message": str(raw_item.get("message", "")),
+            "warnings": [],
+            "errors": [],
+        })
+
+    if not normalized_items and original_payload.get("items"):
+        for idx, item in enumerate(original_payload["items"]):
+            normalized_items.append({
+                "queue_item_id": f"slskd-qi-{uuid.uuid4().hex[:8]}",
+                "state": normalized_state,
+                "message": f"transfer {item.get('filename', 'unknown')}",
+                "warnings": [],
+                "errors": [],
+            })
+
+    return {
+        "submission_id": submission_id,
+        "state": normalized_state,
+        "items": normalized_items,
+        "blocked": raw_response.get("blocked", False),
+        "block_reasons": [],
+        "warnings": [],
+        "errors": raw_response.get("errors", []),
+    }
+
+
+def _map_slskd_transfer_state_to_queue_state(state: str) -> str:
+    """Map a raw slskd transfer state to SlskdQueueSubmissionState value."""
+    normalized = state.lower().strip() if isinstance(state, str) else ""
+    mapping = {
+        "queued": SlskdQueueSubmissionState.QUEUED.value,
+        "downloading": SlskdQueueSubmissionState.DOWNLOADING.value,
+        "complete": SlskdQueueSubmissionState.COMPLETE.value,
+        "completed": SlskdQueueSubmissionState.COMPLETE.value,
+        "succeeded": SlskdQueueSubmissionState.COMPLETE.value,
+        "success": SlskdQueueSubmissionState.COMPLETE.value,
+        "failed": SlskdQueueSubmissionState.FAILED.value,
+        "error": SlskdQueueSubmissionState.FAILED.value,
+        "cancelled": SlskdQueueSubmissionState.FAILED.value,
+        "duplicate": SlskdQueueSubmissionState.DUPLICATE.value,
+        "locked": SlskdQueueSubmissionState.LOCKED.value,
+        "useroffline": SlskdQueueSubmissionState.USER_OFFLINE.value,
+        "user_offline": SlskdQueueSubmissionState.USER_OFFLINE.value,
+        "offline": SlskdQueueSubmissionState.USER_OFFLINE.value,
+        "invalid": SlskdQueueSubmissionState.INVALID_ITEM.value,
+        "unavailable": SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value,
+    }
+    return mapping.get(normalized, SlskdQueueSubmissionState.QUEUED.value)
+
+
+def _sanitize_error_message(message: str, config: SlskdProviderConfig) -> str:
+    """Remove sensitive values from error messages."""
+    sanitized = message
+    if config.api_key:
+        sanitized = sanitized.replace(config.api_key, _REDACTED)
+    return sanitized
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -676,12 +916,86 @@ class SlskdPayloadMapper:
             files=files,
         )
 
+    @staticmethod
+    def map_transfer_status_to_flux(
+        payload: dict[str, Any],
+        *,
+        transfer_id: str,
+        queue_item_id: str,
+    ) -> TransferStatus:
+        """Convert a slskd-like transfer status payload into a Flux TransferStatus."""
+        state_raw = payload.get("state", "")
+        if isinstance(state_raw, str):
+            state_raw = state_raw.lower().strip()
+
+        state_map: dict[str, TransferState] = {
+            "queued": TransferState.QUEUED,
+            "waiting": TransferState.WAITING,
+            "inprogress": TransferState.RUNNING,
+            "downloading": TransferState.RUNNING,
+            "running": TransferState.RUNNING,
+            "paused": TransferState.PAUSED,
+            "completed": TransferState.COMPLETED,
+            "complete": TransferState.COMPLETED,
+            "failed": TransferState.FAILED,
+            "error": TransferState.FAILED,
+            "cancelled": TransferState.CANCELLED,
+            "aborted": TransferState.CANCELLED,
+        }
+        state = state_map.get(state_raw, TransferState.UNKNOWN)
+
+        progress = payload.get("progress_percent")
+        if isinstance(progress, (int, float)):
+            progress_pct = float(max(0.0, min(100.0, progress)))
+        else:
+            progress_pct = None
+
+        bytes_transferred = payload.get("bytes_transferred")
+        if isinstance(bytes_transferred, (int, float)) and bytes_transferred >= 0:
+            bytes_transferred = int(bytes_transferred)
+        else:
+            bytes_transferred = None
+
+        total_bytes = payload.get("total_bytes")
+        if isinstance(total_bytes, (int, float)) and total_bytes >= 0:
+            total_bytes = int(total_bytes)
+        else:
+            total_bytes = None
+
+        speed_bps = payload.get("speed_bytes_per_second")
+        if isinstance(speed_bps, (int, float)):
+            speed_bps = float(speed_bps)
+        else:
+            speed_bps = None
+
+        eta_s = payload.get("eta_seconds")
+        if isinstance(eta_s, (int, float)):
+            eta_s = float(eta_s)
+        else:
+            eta_s = None
+
+        return TransferStatus(
+            transfer_id=transfer_id,
+            queue_item_id=queue_item_id,
+            state=state,
+            progress_percent=progress_pct,
+            bytes_transferred=bytes_transferred,
+            total_bytes=total_bytes,
+            speed_bytes_per_second=speed_bps,
+            eta_seconds=eta_s,
+            warnings=list(payload.get("warnings", [])),
+            errors=list(payload.get("errors", [])),
+        )
+
 
 class SlskdProvider(SearchProvider, QueueExecutionProvider):
     """Slskd provider adapter for Flux with offline/injected-client search flow.
 
     Without an injected client, it returns controlled unavailable states
     and does NOT access the network.
+
+    When allow_network=True and base_url is configured, uses SlskdHttpClient
+    for real HTTP communication with the slskd backend.
 
     Core services must NOT import this module directly.
     They should depend on the generic SearchProvider and QueueExecutionProvider
@@ -696,9 +1010,9 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
     6. Map responses to SearchCandidate via SlskdPayloadMapper.
     7. Return SearchProviderResult.
 
-    Queue execution flow (offline/fake only in this commit):
+    Queue execution flow:
     1. Convert TransferExecutionRequest to slskd-like payload.
-    2. Call client.submit_queue() (fake/injected only).
+    2. Call client.submit_queue() (fake/injected or real HTTP).
     3. Map response to TransferSubmissionResult.
     4. Return TransferSubmissionResult.
     """
@@ -710,6 +1024,13 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
 
     _QUEUE_CAPABILITIES: list[ProviderCapability] = [
         ProviderCapability.QUEUE_PLANNING,
+        ProviderCapability.HEALTH,
+    ]
+
+    _FULL_CAPABILITIES: list[ProviderCapability] = [
+        ProviderCapability.SEARCH,
+        ProviderCapability.QUEUE_PLANNING,
+        ProviderCapability.TRANSFER_STATUS,
         ProviderCapability.HEALTH,
     ]
 
@@ -727,7 +1048,7 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
         return "slskd"
 
     def capabilities(self) -> list[ProviderCapability]:
-        return list(self._SEARCH_CAPABILITIES)
+        return list(self._FULL_CAPABILITIES)
 
     def health(self) -> ProviderHealth:
         if self._client is None:
@@ -758,11 +1079,12 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
             payload = self._client.health_check()
             return SlskdPayloadMapper.map_provider_health(self._config, payload)
         except Exception as exc:  # noqa: BLE001
+            safe_msg = _sanitize_error_message(str(exc), self._config)
             return ProviderHealth(
                 provider=self.name,
                 kind=ProviderKind.EXTERNAL,
                 availability=ProviderAvailability.UNAVAILABLE,
-                status_message=f"slskd health check failed: {exc}",
+                status_message=f"slskd health check failed: {safe_msg}",
                 capabilities=self.capabilities(),
                 errors=["health check exception"],
             )
@@ -780,10 +1102,11 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
             search_text = self._build_search_text(query)
             search_id = client.start_search(search_text)
         except Exception as exc:  # noqa: BLE001
+            safe_msg = _sanitize_error_message(str(exc), self._config)
             return SearchProviderResult(
                 provider=self.name,
                 query=query,
-                errors=[f"slskd search start failed: {exc}"],
+                errors=[f"slskd search start failed: {safe_msg}"],
             )
 
         warnings: list[str] = []
@@ -792,10 +1115,11 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
         try:
             state, timeout_reached, warnings = self._poll_until_complete(client, search_id, warnings)
         except Exception as exc:  # noqa: BLE001
+            safe_msg = _sanitize_error_message(str(exc), self._config)
             return SearchProviderResult(
                 provider=self.name,
                 query=query,
-                errors=[f"slskd search polling failed: {exc}"],
+                errors=[f"slskd search polling failed: {safe_msg}"],
                 warnings=warnings,
             )
 
@@ -823,10 +1147,11 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
         try:
             payload = client.get_search_responses(search_id)
         except Exception as exc:  # noqa: BLE001
+            safe_msg = _sanitize_error_message(str(exc), self._config)
             return SearchProviderResult(
                 provider=self.name,
                 query=query,
-                errors=[f"slskd search response retrieval failed: {exc}"],
+                errors=[f"slskd search response retrieval failed: {safe_msg}"],
                 warnings=warnings,
             )
 
@@ -883,7 +1208,8 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
             try:
                 state_payload = client.get_search_state(search_id)
             except Exception as exc:  # noqa: BLE001
-                warnings.append(f"slskd poll attempt {attempt} failed: {exc}")
+                safe_msg = _sanitize_error_message(str(exc), self._config)
+                warnings.append(f"slskd poll attempt {attempt} failed: {safe_msg}")
                 if attempt == max_attempts:
                     timeout_reached = True
                     return SearchState.UNKNOWN, timeout_reached, warnings
@@ -909,11 +1235,10 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
     def submit_queue(self, request: TransferExecutionRequest) -> TransferSubmissionResult:
         """Submit a queue transfer request via the slskd adapter.
 
-        This is offline/fake only in this commit. No real network calls,
-        no real downloads, no real queue operations.
+        Uses injected client if available, otherwise uses real HTTP client
+        when allow_network=True and base_url is configured.
 
-        Without an injected client that supports submit_queue, returns
-        a controlled unavailable state.
+        Without an active client, returns a controlled unavailable state.
         """
         client = self._resolve_client()
         if client is None:
@@ -958,17 +1283,58 @@ class SlskdProvider(SearchProvider, QueueExecutionProvider):
         try:
             response = client.submit_queue(payload)
         except Exception as exc:  # noqa: BLE001
+            safe_msg = _sanitize_error_message(str(exc), self._config)
             return TransferSubmissionResult(
                 submission_id=str(uuid.uuid4()),
                 request_id=request.request_id,
                 state=TransferSubmissionState.PROVIDER_ERROR,
                 blocked=True,
-                block_reasons=[f"slskd queue submission failed: {exc}"],
+                block_reasons=[f"slskd queue submission failed: {safe_msg}"],
                 errors=["queue submission exception"],
             )
 
         return SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(
             response, request.request_id,
+        )
+
+    def get_status(
+        self,
+        transfer_id: str,
+        *,
+        queue_item_id: str | None = None,
+    ) -> TransferStatus:
+        """Poll transfer status via the slskd adapter.
+
+        Uses injected client if available, otherwise uses real HTTP client
+        when allow_network=True and base_url is configured.
+
+        Without an active client, returns a controlled UNKNOWN/FAILED status.
+        """
+        effective_queue_item_id = queue_item_id or transfer_id
+        client = self._resolve_client()
+        if client is None:
+            return TransferStatus(
+                transfer_id=transfer_id,
+                queue_item_id=effective_queue_item_id,
+                state=TransferState.FAILED,
+                errors=["slskd adapter has no active client; transfer status unavailable"],
+            )
+
+        try:
+            payload = client.get_transfer_status(transfer_id)
+        except Exception as exc:  # noqa: BLE001
+            safe_msg = _sanitize_error_message(str(exc), self._config)
+            return TransferStatus(
+                transfer_id=transfer_id,
+                queue_item_id=effective_queue_item_id,
+                state=TransferState.FAILED,
+                errors=[f"slskd transfer status check failed: {safe_msg}"],
+            )
+
+        return SlskdPayloadMapper.map_transfer_status_to_flux(
+            payload,
+            transfer_id=transfer_id,
+            queue_item_id=effective_queue_item_id,
         )
 
 
@@ -1247,6 +1613,43 @@ def _simulate_slskd_queue_submission(
     }
 
 
+def _simulate_transfer_status(
+    transfer_id: str,
+    state: str = "completed",
+) -> dict[str, Any]:
+    """Simulate a slskd transfer status response.
+
+    Pure function. No network, no side effects.
+    """
+    normalized_state = state.lower().strip() if isinstance(state, str) else ""
+    progress_map = {
+        "queued": 0.0,
+        "inprogress": 45.5,
+        "downloading": 72.3,
+        "completed": 100.0,
+        "complete": 100.0,
+        "failed": 0.0,
+        "error": 0.0,
+        "cancelled": 0.0,
+        "aborted": 0.0,
+    }
+    progress = progress_map.get(normalized_state, 0.0)
+    total_bytes = 12345678
+    bytes_transferred = int(total_bytes * progress / 100.0) if progress > 0 else 0
+
+    return {
+        "transfer_id": transfer_id,
+        "state": normalized_state,
+        "progress_percent": progress,
+        "bytes_transferred": bytes_transferred,
+        "total_bytes": total_bytes,
+        "speed_bytes_per_second": 0.0 if progress in (0.0, 100.0) else 524288.0,
+        "eta_seconds": 0.0 if progress in (0.0, 100.0) else round((total_bytes - bytes_transferred) / 524288.0, 1),
+        "warnings": [] if normalized_state != "failed" else ["transfer failed"],
+        "errors": [] if normalized_state != "failed" else ["transfer encountered an error"],
+    }
+
+
 # Extend the SlskdClientProtocol with queue methods
 class SlskdClientProtocol(Protocol):
     """Injectable protocol for slskd-like client interactions.
@@ -1291,6 +1694,14 @@ class SlskdClientProtocol(Protocol):
 
         Offline/fake implementations simulate the response.
         Real implementations would call the slskd downloads API.
+        """
+        ...
+
+    def get_transfer_status(self, transfer_id: str) -> dict[str, Any]:
+        """Return the current status of a transfer.
+
+        Offline/fake implementations simulate transfer states.
+        Real implementations call the slskd transfers status API.
         """
         ...
 

@@ -1983,3 +1983,224 @@ def test_transfer_execute_slskd_offline_apply_unavailable(capsys) -> None:
     output = capsys.readouterr().out
     assert "transfer-execution: failed" in output
     assert "slskd provider unavailable" in output
+
+
+# --- Slskd queue execution CLI opt-in tests ---
+
+
+def test_transfer_execute_slskd_allow_network_without_url_blocks(capsys) -> None:
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--apply",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output
+    assert "--url" in output
+
+
+def test_transfer_execute_slskd_allow_network_without_api_key_env_blocks(capsys) -> None:
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--apply",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output
+    assert "--api-key-env" in output
+
+
+def test_transfer_execute_slskd_allow_network_with_empty_env_blocks(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("EMPTY_SLSKD_KEY", "")
+
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--api-key-env", "EMPTY_SLSKD_KEY",
+        "--apply",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output
+    assert "not set or empty" in output.lower()
+
+
+def test_transfer_execute_slskd_api_key_not_printed(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("TEST_SLSKD_QUEUE_KEY", "super-secret-queue-key-xyz")
+
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--api-key-env", "TEST_SLSKD_QUEUE_KEY",
+        "--apply",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "super-secret-queue-key-xyz" not in output
+
+
+def test_transfer_execute_slskd_real_network_mocked_succeeds(capsys, monkeypatch) -> None:
+    import json
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    call_log = []
+
+    def fake_urlopen(req, timeout=None):
+        call_log.append(req.method)
+        if req.method == "POST" and "searches" in str(req.full_url):
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(json.dumps({
+                "responses": [
+                    {
+                        "username": "test-user",
+                        "directory": "Music/Test",
+                        "files": [{"filename": "test.flac", "size": 1000, "bitrate": 320, "extension": "flac", "duration": 180}],
+                        "locked_files": [],
+                    }
+                ],
+                "response_count": 1,
+            }).encode())
+        if req.method == "GET":
+            return FakeResponse(b'{"state": "Completed"}')
+        if req.method == "POST" and "transfers" in str(req.full_url):
+            return FakeResponse(json.dumps({
+                "id": "transfer-1",
+                "state": "Queued",
+                "items": [{"id": "qi-0", "state": "Queued", "message": "queued test.flac"}],
+            }).encode())
+        return FakeResponse(b'{}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+    monkeypatch.setenv("TEST_SLSKD_QUEUE_KEY", "test-key")
+
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--api-key-env", "TEST_SLSKD_QUEUE_KEY",
+        "--apply",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+    assert "Submitted" in output
+    assert "test-key" not in output
+
+
+def test_transfer_execute_slskd_real_network_http_error_returns_failed(capsys, monkeypatch) -> None:
+    import json
+    from urllib.error import URLError
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST" and "searches" in str(req.full_url):
+            class FakeResponse:
+                def __init__(self, body): self._body = body
+                def read(self): return self._body
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            class FakeResponse:
+                def __init__(self, body): self._body = body
+                def read(self): return self._body
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+            return FakeResponse(json.dumps({
+                "responses": [
+                    {
+                        "username": "test-user",
+                        "directory": "Music/Test",
+                        "files": [{"filename": "test.flac", "size": 1000, "extension": "flac"}],
+                        "locked_files": [],
+                    }
+                ],
+                "response_count": 1,
+            }).encode())
+        if req.method == "GET":
+            class FakeResponse:
+                def __init__(self, body): self._body = body
+                def read(self): return self._body
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+            return FakeResponse(b'{"state": "Completed"}')
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+    monkeypatch.setenv("TEST_SLSKD_QUEUE_KEY", "test-key")
+
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--api-key-env", "TEST_SLSKD_QUEUE_KEY",
+        "--apply",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: failed" in output
+    assert "test-key" not in output
+
+
+def test_transfer_execute_slskd_default_is_offline_dry_run(capsys) -> None:
+    assert main([
+        "transfer", "execute", "slskd",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
+
+
+def test_transfer_execute_slskd_offline_does_not_access_network(capsys) -> None:
+    network_accessed = []
+
+    def tracking_urlopen(req, timeout=None):
+        network_accessed.append(req.full_url)
+        raise Exception("should not be called")
+
+    import noqlen_flux.providers.slskd as slskd_mod
+    original = slskd_mod.urlopen
+    slskd_mod.urlopen = tracking_urlopen
+
+    try:
+        assert main([
+            "transfer", "execute", "slskd",
+            "--artist", "Example Artist",
+            "--title", "Example Track",
+            "--offline",
+            "--dry-run",
+        ]) == 0
+    finally:
+        slskd_mod.urlopen = original
+
+    assert not network_accessed
+    output = capsys.readouterr().out
+    assert "transfer-execution: success" in output
