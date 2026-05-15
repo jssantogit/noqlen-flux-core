@@ -300,6 +300,48 @@ Tests use mock `subprocess.run()`; no real ffprobe/ffmpeg is required. All audio
 
 `QualityProfile` is versioned so MusicLab can calibrate thresholds before any real provider or audio analysis is active. The default profile declares `stage: post-download` and `status: contracts-only`.
 
+## Spectral Analysis Safety
+
+`SpectralAnalysisService` provides controlled spectral analysis with full safety guarantees:
+
+- **Backend abstraction**: `SpectralBackend` (ABC) with `FakeSpectralBackend`. All real analysis backends are opt-in.
+- **Workspace containment**: All spectral analysis operations confined to workspace root. Path traversal and symlink escape are blocked.
+- **Dry-run default**: Apply mode requires explicit invocation. No file writes in dry-run.
+- **No real audio in tests**: All tests use `FakeSpectralBackend`. No real audio files, no ffmpeg, no network.
+- **Subprocess safety**: If future real backends use subprocess, they must have short timeouts and be mockable.
+- **No decision execution**: Spectral analysis produces evidence only. It does not route, stage, quarantine, delete, or handoff automatically.
+
+Critical signal classifications (enforced by `SpectralPolicy`):
+- Cutoff/lowpass → `heuristic_warning` (never `objective_failure`)
+- Fake bit depth/sample rate → `heuristic_warning`
+- Upsampled/downsampled → `heuristic_warning`
+- Transcode signature → `heuristic_warning`
+- Container/codec mismatch → `heuristic_warning`
+- Clipping/loudness/noise floor → `review_signal`
+- `never_objective_on_heuristic: true` — heuristic signals cannot become objective failures
+
+## Transcode Detection Safety
+
+`TranscodeDetection` produces structured detection results from spectral profiles:
+
+- `is_lowpass_cutoff_isolated()` — ensures cutoff/lowpass alone is never flagged as transcode.
+- `lowpass_cutoff_guard()` — returns guard data documenting what must and must not happen for isolated cutoff/lowpass.
+- Fake FLAC with container mismatch → review candidate, never delete.
+- Qobuz-like 9.4 kHz cutoff + decode OK → NOT probable transcode.
+- Lowpass only → NOT probable transcode.
+- Source profile alone does not decide transcode detection.
+- Detection results are evidence only — no routing, staging, or destructive action is automated.
+
+## Advanced Quality Confidence Scoring Safety
+
+`QualityService.score_confidence()` produces structured confidence output without executing actions:
+
+- Confidence scoring is advisory only — it does not trigger routing, staging, or delete.
+- `advised_review` and `advised_block` are guidance flags, not decisions.
+- `QualityResult` now includes `evidence_summary` and `review_signals` for audit trail.
+- `QualityResult` is separated from `RoutingDecision` and `StagingPlan`.
+- No automatic quality-to-action pipeline exists in this commit.
+
 ## Routing Decisions
 
 Routing decisions are currently planned-only. `RoutingDecisionService` does not move, copy, delete, quarantine, or reject any files. It accepts `QualityResult` objects and returns `RoutingDecision` or `FluxResult` with `PlannedChange` entries, never `AppliedChange`.

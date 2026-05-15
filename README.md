@@ -448,7 +448,42 @@ Simulate a fake bad quality result:
 noqlen-flux quality fake bad
 ```
 
-This fake command is not real audio quality analysis. Real opt-in decode validation is available through `quality inspect --apply`, but Flux still has no transcode detection, spectrogram analysis, clipping detection, or low-pass analysis. Spectral cutoff/low-pass evidence remains weak and requires correlation with objective signals.
+## Spectral Analysis and Transcode Detection
+
+Spectral analysis provides signal-level evidence for format integrity, transcode detection, and quality confidence. `SpectralAnalysisService` uses backends (fake or future ffmpeg-based) within the workspace. `TranscodeDetection` bridges spectral evidence into structured detection results.
+
+Spectral quality inspect (dry-run, fake backend):
+
+```bash
+noqlen-flux quality inspect --workspace /tmp/workspace --path incoming/demo.wav --dry-run
+```
+
+Spectral quality inspect with spectral analysis flag:
+
+```bash
+noqlen-flux quality inspect --workspace /tmp/workspace --path incoming/demo.wav --spectral --dry-run
+```
+
+Run advanced quality calibration in MusicLab:
+
+```bash
+noqlen-flux musiclab scenario run-pack --pack advanced-quality --workspace /tmp/workspace --dry-run
+```
+
+Run false-positive guard (ensures heuristics never over-punish):
+
+```bash
+noqlen-flux musiclab scenario run-pack --pack false-positive-guard --workspace /tmp/workspace --dry-run
+```
+
+Key invariants:
+- Spectral cutoff/lowpass isolated → `heuristic_warning` only, never `objective_failure`, never `QualityGrade.bad`
+- Fake FLAC / transcode evidence → review candidate, never delete
+- Clipping / loudness / noise floor → `review_signal`
+- Source profile alone does not decide quality
+- All analysis is workspace-contained with dry-run default
+- No destructive actions automated from quality evidence
+- Quality confidence scoring is advisory only, separated from routing/staging
 
 ## Audio Probe Infrastructure
 

@@ -231,6 +231,80 @@ Heuristic warnings (such as low-pass suspicion, clipping suspicion, or transcode
 
 The separation must remain: providers → scoring (pre-download) → download/transfer → quality (post-download) → routing (combined decision). `CandidateScoringService` does not import `QualityService`. `QualityService` does not import `CandidateScoringService`.
 
+## Spectral Analysis Foundation
+
+Spectral analysis is a separate quality domain from basic audio probing and routing. It provides signal-level evidence for format integrity, transcode detection, and quality confidence.
+
+Flux owns these spectral models:
+
+- `SpectralProfile` — detected audio characteristics: codec, sample_rate, bit_depth, spectral_cutoff_hz, lowpass_detected, fake_bit_depth, fake_sample_rate, upsampled, downsampled, transcode_signature, container_codec_mismatch, bitrate_anomaly, clipping_detected, loudness_anomaly, noise_floor_elevated.
+- `SpectralFinding` — individual finding with `SpectralSignalKind` (objective_failure, heuristic_warning, review_signal, confidence_signal, diagnostic) and `SpectralEvidenceKind` (cutoff, lowpass, fake_bit_depth, fake_sample_rate, upsampled, downsampled, transcode_signature, container_mismatch, codec_mismatch, bitrate_anomaly, clipping, loudness, noise_floor).
+- `SpectralPolicy` — controls classification rules. All heuristic signals (cutoff, lowpass, fake depth/rate, upsampled, downsampled, transcode) remain `heuristic_warning` by policy.
+- `SpectralAnalysisRequest` / `SpectralAnalysisResult` — request/response with evidence_summary, objective_failures, heuristic_warnings, review_signals, confidence_signals.
+- `SpectralBackend` (ABC) — abstract backend interface for spectral analysis.
+- `FakeSpectralBackend` — fully configurable mock backend. No real audio required.
+- `SpectralAnalysisService` — service with full safety checks, dry-run default, workspace containment.
+
+Critical invariants:
+- Cutoff/lowpass isolated → `heuristic_warning`, never `objective_failure`.
+- Cutoff/lowpass isolated → never `QualityGrade.bad` alone.
+- Cutoff/lowpass isolated → never quarantine/rejected/delete.
+- Fake bit depth/sample rate → `heuristic_warning`.
+- Upsampled/downsampled → `heuristic_warning`.
+- Transcode signature → `heuristic_warning`, review candidate.
+- Container/codec mismatch → `heuristic_warning`.
+- Clipping/loudness/noise floor → `review_signal`.
+- Source profile alone does not decide quality.
+- All analysis is workspace-contained with dry-run default.
+
+## Transcode Detection
+
+`TranscodeDetection` module bridges spectral evidence into structured detection results.
+
+- `TranscodeDetectionResult` — is_probable_transcode, is_probable_fake_lossless, evidence_items, detection/heuristic/review signals.
+- `detect_transcode_from_profile()` — converts `SpectralProfile` into detection result.
+- `is_lowpass_cutoff_isolated()` — guard ensuring cutoff/lowpass alone is not classified as transcode.
+- `lowpass_cutoff_guard()` — returns structured guard data: is_isolated, must_be_heuristic_only, must_not_be_objective_failure, etc.
+- `transcode_detection_to_quality_findings()` — converts detection evidence to QualityFinding list.
+
+Fake FLAC detection:
+- Transcode signature + container mismatch → probable_transcode
+- Lowpass + FLAC container → probable_fake_lossless
+- Cutoff 9.4 kHz + decode ok → NOT probable_transcode (isolated cutoff)
+- Lowpass only → NOT probable_transcode (isolated lowpass)
+
+## Advanced Quality Confidence
+
+Quality confidence scoring enhances `QualityResult` with structured evidence and explainability.
+
+- `QualityResult` now includes: `review_signals`, `evidence_summary`, `calibration_profile`, `calibration_version`.
+- `QualityFindingKind` extended with `REVIEW_SIGNAL` and `CONFIDENCE_SIGNAL`.
+- `QualityService.score_confidence()` produces: grade, confidence, explanation, actionable flag, advised_review flag, advised_block flag.
+- Confidence scoring does not execute actions — separated from RoutingDecision and Staging.
+- Evidence summary tracks: objective_failure_count, heuristic_warning_count, review_signal_count, is_clean flag.
+
+## Advanced Quality MusicLab Calibration
+
+The `advanced-quality` MusicLab pack provides 15 calibration scenarios:
+
+| Scenario | Category | Expected |
+|----------|----------|----------|
+| real-flac-good | GOOD | EXCELLENT, approved |
+| fake-flac-from-mp3 | SUSPICIOUS | MEDIUM, review (not reject) |
+| fake-24bit-detected | SUSPICIOUS | MEDIUM, review |
+| fake-96khz-detected | SUSPICIOUS | MEDIUM, review |
+| upsampled-44-1-to-96 | SUSPICIOUS | MEDIUM, review |
+| downsampled-96-to-44-1 | SUSPICIOUS | MEDIUM, review |
+| lossy-source-lossless-container | SUSPICIOUS | MEDIUM, review |
+| bitrate-container-mismatch | SUSPICIOUS | MEDIUM, review |
+| clipping-suspicion-only | SUSPICIOUS | MEDIUM (review signal) |
+| loudness-suspicion-only | SUSPICIOUS | MEDIUM (review signal) |
+| multiple-heuristics-review | SUSPICIOUS | MEDIUM, review (must not reject/delete) |
+| objective-failure-plus-heuristics | BAD | BAD via objective, not heuristics |
+| qobuz-like-advanced | FALSE_POSITIVE | review/review (never bad, never reject) |
+| mp3-320-good-lowpass-like | FALSE_POSITIVE | MEDIUM (never bad) |
+| fake-flac-lowpass-decode-ok | FALSE_POSITIVE | MEDIUM (never bad, never delete) |
+
 ## Routing Decision Foundation
 
 Post-download routing decision is a separate core domain from both pre-download scoring and post-download quality analysis. This commit introduces the contracts and fake simulation layer for future file routing actions.
