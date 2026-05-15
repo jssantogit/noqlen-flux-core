@@ -25,6 +25,8 @@ class QualityFindingSeverity(StrEnum):
 class QualityFindingKind(StrEnum):
     OBJECTIVE_FAILURE = "objective_failure"
     HEURISTIC_WARNING = "heuristic_warning"
+    REVIEW_SIGNAL = "review_signal"
+    CONFIDENCE_SIGNAL = "confidence_signal"
     DIAGNOSTIC = "diagnostic"
     METADATA_SIGNAL = "metadata_signal"
     UNKNOWN = "unknown"
@@ -67,8 +69,12 @@ class QualityResult:
     findings: list[QualityFinding] = field(default_factory=list)
     objective_failures: list[QualityFinding] = field(default_factory=list)
     heuristic_warnings: list[QualityFinding] = field(default_factory=list)
+    review_signals: list[QualityFinding] = field(default_factory=list)
     diagnostics: list[QualityFinding] = field(default_factory=list)
     confidence: float = 0.0
+    evidence_summary: SafeMetadata = field(default_factory=dict)
+    calibration_profile: str = "default_v1"
+    calibration_version: str = "1"
     profile: QualityProfile = field(default_factory=lambda: DEFAULT_QUALITY_PROFILE)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -90,6 +96,9 @@ class QualitySummary:
     unknown_count: int = 0
     warning_count: int = 0
     error_count: int = 0
+    review_signal_count: int = 0
+    objective_failure_count: int = 0
+    confidence_avg: float = 0.0
     metadata: SafeMetadata = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

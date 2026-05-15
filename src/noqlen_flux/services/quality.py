@@ -57,9 +57,28 @@ class QualityService(FluxService):
 
         objective_failures = [f for f in parsed_findings if f.kind == QualityFindingKind.OBJECTIVE_FAILURE]
         heuristic_warnings_list = [f for f in parsed_findings if f.kind == QualityFindingKind.HEURISTIC_WARNING]
+        review_signals = [f for f in parsed_findings if f.kind == QualityFindingKind.REVIEW_SIGNAL]
+        confidence_signals = [f for f in parsed_findings if f.kind == QualityFindingKind.CONFIDENCE_SIGNAL]
         diagnostics = [f for f in parsed_findings if f.kind == QualityFindingKind.DIAGNOSTIC]
 
         confidence = _compute_confidence(selected_grade, objective_failures, heuristic_warnings_list)
+
+        evidence_summary = {
+            "objective_failure_count": len(objective_failures),
+            "heuristic_warning_count": len(heuristic_warnings_list),
+            "review_signal_count": len(review_signals),
+            "confidence_signal_count": len(confidence_signals),
+            "diagnostic_count": len(diagnostics),
+            "finding_count": len(parsed_findings),
+            "has_objective_failure": len(objective_failures) > 0,
+            "has_heuristic_warning": len(heuristic_warnings_list) > 0,
+            "has_review_signal": len(review_signals) > 0,
+            "is_clean": (
+                len(objective_failures) == 0
+                and len(heuristic_warnings_list) == 0
+                and len(review_signals) == 0
+            ),
+        }
 
         result = QualityResult(
             item_id=item_id,
@@ -68,10 +87,14 @@ class QualityService(FluxService):
             findings=parsed_findings,
             objective_failures=objective_failures,
             heuristic_warnings=heuristic_warnings_list,
+            review_signals=review_signals,
             diagnostics=diagnostics,
             confidence=confidence,
+            evidence_summary=evidence_summary,
+            calibration_profile="default_v1",
+            calibration_version="1",
             profile=selected_profile,
-            warnings=[f.message for f in heuristic_warnings_list],
+            warnings=[f.message for f in heuristic_warnings_list + review_signals],
             errors=[f.message for f in objective_failures],
             metadata={"stage": "post-download", "analysis": "fake"},
         )
@@ -138,6 +161,7 @@ class QualityService(FluxService):
         ).finish()
 
     def summarize_quality(self, results: list[QualityResult]) -> FluxResult:
+        confidences = [r.confidence for r in results if r.confidence > 0]
         summary = QualitySummary(
             total_items=len(results),
             excellent_count=sum(1 for r in results if r.grade == QualityGrade.EXCELLENT),
@@ -146,6 +170,9 @@ class QualityService(FluxService):
             unknown_count=sum(1 for r in results if r.grade == QualityGrade.UNKNOWN),
             warning_count=sum(len(r.heuristic_warnings) for r in results),
             error_count=sum(len(r.objective_failures) for r in results),
+            review_signal_count=sum(len(r.review_signals) for r in results),
+            objective_failure_count=sum(len(r.objective_failures) for r in results),
+            confidence_avg=round(sum(confidences) / len(confidences), 3) if confidences else 0.0,
         )
 
         artifact = Artifact(
@@ -177,6 +204,8 @@ class QualityService(FluxService):
                 "unknown_count": summary.unknown_count,
                 "warning_count": summary.warning_count,
                 "error_count": summary.error_count,
+                "review_signal_count": summary.review_signal_count,
+                "confidence_avg": summary.confidence_avg,
                 "quality_summary": summary.to_dict(),
             },
         ).finish()
@@ -195,6 +224,7 @@ class QualityService(FluxService):
         findings: list[QualityFinding] = []
         objective_failures: list[QualityFinding] = []
         heuristic_warnings: list[QualityFinding] = []
+        review_signals: list[QualityFinding] = []
         diagnostics: list[QualityFinding] = []
 
         probe_findings = getattr(probe_result, "findings", [])
@@ -203,6 +233,8 @@ class QualityService(FluxService):
             kind_map = {
                 "objective_failure": QualityFindingKind.OBJECTIVE_FAILURE,
                 "heuristic_warning": QualityFindingKind.HEURISTIC_WARNING,
+                "review_signal": QualityFindingKind.REVIEW_SIGNAL,
+                "confidence_signal": QualityFindingKind.CONFIDENCE_SIGNAL,
                 "diagnostic": QualityFindingKind.DIAGNOSTIC,
             }
             kind = kind_map.get(category, QualityFindingKind.UNKNOWN)
@@ -210,7 +242,7 @@ class QualityService(FluxService):
                 QualityFindingSeverity.ERROR
                 if kind == QualityFindingKind.OBJECTIVE_FAILURE
                 else QualityFindingSeverity.WARNING
-                if kind == QualityFindingKind.HEURISTIC_WARNING
+                if kind in (QualityFindingKind.HEURISTIC_WARNING, QualityFindingKind.REVIEW_SIGNAL)
                 else QualityFindingSeverity.INFO
             )
 
@@ -227,6 +259,8 @@ class QualityService(FluxService):
                 objective_failures.append(qf)
             elif kind == QualityFindingKind.HEURISTIC_WARNING:
                 heuristic_warnings.append(qf)
+            elif kind == QualityFindingKind.REVIEW_SIGNAL:
+                review_signals.append(qf)
             elif kind == QualityFindingKind.DIAGNOSTIC:
                 diagnostics.append(qf)
 
@@ -247,9 +281,28 @@ class QualityService(FluxService):
 
         confidence = _compute_quality_confidence(grade, objective_failures, heuristic_warnings, findings)
 
+        evidence_summary = {
+            "objective_failure_count": len(objective_failures),
+            "heuristic_warning_count": len(heuristic_warnings),
+            "review_signal_count": len(review_signals),
+            "diagnostic_count": len(diagnostics),
+            "finding_count": len(findings),
+            "has_objective_failure": len(objective_failures) > 0,
+            "has_heuristic_warning": len(heuristic_warnings) > 0,
+            "has_review_signal": len(review_signals) > 0,
+            "is_clean": (
+                len(objective_failures) == 0
+                and len(heuristic_warnings) == 0
+                and len(review_signals) == 0
+            ),
+            "probe_success": probe_success,
+            "decode_ok": decode_ok,
+            "has_audio_stream": has_audio,
+        }
+
         warnings_list = [
             f"{qf.code}: {qf.message}"
-            for qf in heuristic_warnings
+            for qf in heuristic_warnings + review_signals
         ]
         errors_list = [
             f"{qf.code}: {qf.message}"
@@ -265,8 +318,12 @@ class QualityService(FluxService):
             findings=findings,
             objective_failures=objective_failures,
             heuristic_warnings=heuristic_warnings,
+            review_signals=review_signals,
             diagnostics=diagnostics,
             confidence=confidence,
+            evidence_summary=evidence_summary,
+            calibration_profile=selected_profile.name,
+            calibration_version=selected_profile.version,
             profile=selected_profile,
             warnings=warnings_list,
             errors=errors_list,
@@ -422,6 +479,59 @@ class QualityService(FluxService):
                 "quality_result": quality_result.to_dict(),
             },
         ).finish()
+
+    def score_confidence(
+        self,
+        quality_result: QualityResult,
+    ) -> dict[str, Any]:
+        grade = quality_result.grade
+        objective = quality_result.objective_failures
+        heuristic = quality_result.heuristic_warnings
+        review = quality_result.review_signals
+
+        base_confidence = quality_result.confidence
+
+        explanation_parts: list[str] = []
+
+        if grade == QualityGrade.EXCELLENT:
+            explanation_parts.append("No issues detected")
+            if not objective and not heuristic and not review:
+                explanation_parts.append("Clean audio signal")
+        elif grade == QualityGrade.BAD:
+            if objective:
+                explanation_parts.append(f"{len(objective)} objective failure(s)")
+            if heuristic:
+                explanation_parts.append(f"{len(heuristic)} heuristic warning(s) (not causing BAD alone)")
+        elif grade == QualityGrade.MEDIUM:
+            if heuristic:
+                explanation_parts.append(f"{len(heuristic)} heuristic warning(s)")
+            if review:
+                explanation_parts.append(f"{len(review)} review signal(s)")
+        elif grade == QualityGrade.UNKNOWN:
+            explanation_parts.append("Insufficient data for quality assessment")
+
+        if quality_result.evidence_summary.get("is_clean"):
+            explanation_parts.append("Clean evidence profile")
+
+        return {
+            "item_id": quality_result.item_id,
+            "grade": grade.value,
+            "confidence": base_confidence,
+            "calibration_profile": quality_result.calibration_profile,
+            "calibration_version": quality_result.calibration_version,
+            "objective_failure_count": len(objective),
+            "heuristic_warning_count": len(heuristic),
+            "review_signal_count": len(review),
+            "explanation": "; ".join(explanation_parts) if explanation_parts else "Standard quality evaluation",
+            "evidence_summary": quality_result.evidence_summary,
+            "actionable": grade != QualityGrade.UNKNOWN,
+            "advised_review": (
+                grade in (QualityGrade.MEDIUM, QualityGrade.BAD)
+                or len(review) > 0
+                or len(heuristic) >= 2
+            ),
+            "advised_block": len(objective) > 0,
+        }
 
 
 def _compute_confidence(
