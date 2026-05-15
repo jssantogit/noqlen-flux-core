@@ -12,6 +12,7 @@ from .handoff import HandoffManifestService
 from .musiclab import MusicLabService
 from .musiclab_quality import MusicLabQualityService
 from .musiclab_scenario import MusicLabScenarioRunnerService
+from .musiclab_score_baseline import MusicLabScoreBaselineRunnerService
 from .musiclab_scoring import MusicLabScoringService
 from .providers import ProviderService
 from .quality import QualityService
@@ -38,6 +39,7 @@ __all__ = [
     "HandoffManifestService",
     "MusicLabQualityService",
     "MusicLabScenarioRunnerService",
+    "MusicLabScoreBaselineRunnerService",
     "MusicLabScoringService",
     "MusicLabService",
     "ProviderService",

@@ -145,6 +145,23 @@ def build_parser() -> argparse.ArgumentParser:
     musiclab_scoring_run = musiclab_scoring_subparsers.add_parser("run", help="Run scoring calibration against default fake dataset")
     musiclab_scoring_run.set_defaults(func=run_musiclab_scoring_run)
 
+    musiclab_scoring_baseline = musiclab_scoring_subparsers.add_parser("baseline", help="Run score baseline calibration")
+    musiclab_scoring_baseline_subparsers = musiclab_scoring_baseline.add_subparsers(dest="musiclab_scoring_baseline_command")
+
+    musiclab_scoring_baseline_list = musiclab_scoring_baseline_subparsers.add_parser("list", help="List all score baseline packs")
+    musiclab_scoring_baseline_list.set_defaults(func=run_musiclab_scoring_baseline_list)
+
+    musiclab_scoring_baseline_run = musiclab_scoring_baseline_subparsers.add_parser("run", help="Run a score baseline pack")
+    musiclab_scoring_baseline_run.add_argument("--pack", required=True, help="Pack ID to run")
+    musiclab_scoring_baseline_run.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_scoring_baseline_run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
+    musiclab_scoring_baseline_run.set_defaults(func=run_musiclab_scoring_baseline_run)
+
+    musiclab_scoring_baseline_run_all = musiclab_scoring_baseline_subparsers.add_parser("run-all", help="Run all score baseline packs")
+    musiclab_scoring_baseline_run_all.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_scoring_baseline_run_all.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
+    musiclab_scoring_baseline_run_all.set_defaults(func=run_musiclab_scoring_baseline_run_all)
+
     musiclab_quality = musiclab_subparsers.add_parser("quality", help="Run quality calibration in MusicLab")
     musiclab_quality_subparsers = musiclab_quality.add_subparsers(dest="musiclab_quality_command")
     musiclab_quality_run = musiclab_quality_subparsers.add_parser("run", help="Run quality calibration against default fake dataset")
@@ -583,6 +600,52 @@ def run_musiclab_scoring_run(_args: argparse.Namespace) -> int:
     from noqlen_flux.services import MusicLabScoringService
 
     result = MusicLabScoringService().run_calibration()
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_scoring_baseline_list(_args: argparse.Namespace) -> int:
+    from noqlen_flux.services import MusicLabScoreBaselineRunnerService
+
+    result = MusicLabScoreBaselineRunnerService().list_packs()
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_scoring_baseline_run(args: argparse.Namespace) -> int:
+    from noqlen_flux.services import MusicLabScoreBaselineRunnerService
+
+    result = MusicLabScoreBaselineRunnerService().run_with_fixture(
+        pack_id=args.pack,
+        workspace_root=args.workspace,
+        dry_run=args.dry_run,
+    )
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_scoring_baseline_run_all(args: argparse.Namespace) -> int:
+    from noqlen_flux.search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
+    from noqlen_flux.services import MusicLabScoreBaselineRunnerService
+
+    query = SearchQuery(
+        kind=SearchKind.TRACK, artist="Test Artist", title="Test Track",
+    )
+    candidate = SearchCandidate(
+        candidate_id="score-baseline-test-candidate",
+        provider="fake",
+        username="flux_test_user",
+        artist="Test Artist",
+        title="Test Track",
+        directory="Test Artist",
+        files=[
+            CandidateFile(
+                filename="Test Track.flac", extension="flac", size_bytes=25000000,
+            )
+        ],
+    )
+
+    result = MusicLabScoreBaselineRunnerService().run_all(query, candidate)
     print(_render_result(result))
     return _exit_code(result.status)
 
