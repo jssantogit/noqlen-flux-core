@@ -4,6 +4,7 @@ from .artifact_registration import ArtifactRegistrationService
 from .base import FluxService
 from .cleanup import CleanupPlanningService
 from .doctor import DoctorService
+from .download_workspace import DownloadWorkspaceService
 from .downloads import DownloadPlanningService
 from .fileops import SafeFileOperationService
 from .handoff import HandoffManifestService
@@ -28,6 +29,7 @@ __all__ = [
     "CleanupPlanningService",
     "DoctorService",
     "DownloadPlanningService",
+    "DownloadWorkspaceService",
     "FluxService",
     "HandoffManifestService",
     "MusicLabQualityService",
