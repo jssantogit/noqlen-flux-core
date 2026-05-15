@@ -31,6 +31,18 @@ The initial workspace layout contains these automatic directories:
 
 Downloads should stage into controlled Flux-owned directories before any handoff. Automated staging must avoid writing directly into a real music library.
 
+`staging apply` is dry-run by default. `--apply` is required before any filesystem change, and the service-level apply path requires explicit routing apply and staging execution policies. The apply workflow uses `SafeFileOperationService` and stays inside the Flux workspace.
+
+Staging destinations are conservative:
+
+- `approved` goes to `workspace/approved/import-ready`.
+- `quarantine` goes to `workspace/quarantine` only when policy allows it.
+- `rejected` goes to `workspace/rejected` and never deletes.
+- `review` remains manual under `workspace/review/manual` and does not automatically copy or move.
+- `delete_eligible` is a marker only; real delete and auto-delete do not exist.
+
+Every staging apply/dry-run returns a structured safety report with policy names, planned/applied/skipped/blocked/failed counts, warnings, errors, and explicit safety checks. Reports use structured Flux metadata and must not include secrets, raw provider payloads, lyrics, raw fingerprints, or real library paths.
+
 ## Quarantine And Rejected
 
 Suspicious, incomplete, unsupported, or policy-failing items should be isolated into quarantine or rejected areas rather than imported. Quarantine is for reviewable uncertainty. Rejected is for objective failures that remain excluded from handoff.

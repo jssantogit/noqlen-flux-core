@@ -31,10 +31,29 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Post-download staging plan contracts and fake planning service (`StagingArea`, `StagingItem`, `StagingPlan`, `StagingPolicy`, `StagingPlanService`).
 - Safe filesystem operation executor with dry-run/apply safety (`FileOperationType`, `FileOperationState`, `FileOperation`, `FileOperationPlan`, `FileOperationResult`, `FileExecutionPolicy`, `SafeFileOperationService`).
 - Safe staging execution workflow connecting `StagingPlan` with `SafeFileOperationService` (`StagingExecutionPolicy`, `StagingExecutionSummary`, `StagingExecutionService`).
+- Safe staging apply workflow for fake workspace scenarios. `staging apply` is dry-run by default, requires explicit `--apply` before writing, requires explicit apply/execution policies inside the service, and is confined to the Flux workspace. Approved items stage under `approved/import-ready`, quarantine under `quarantine`, rejected under `rejected`, and review remains `review/manual` plan-only.
 - Safe handoff manifest foundation for future Flux -> Forge contract (`HandoffManifest`, `HandoffItem`, `HandoffManifestService`).
 - Cleanup planning contracts and fake planning service (`CleanupCandidateKind`, `CleanupActionType`, `CleanupRisk`, `CleanupCandidate`, `CleanupPolicy`, `CleanupDecision`, `CleanupPlan`, `CleanupPlanningService`).
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
+
+## Safe Staging Apply
+
+Staging application is workspace-only and uses `SafeFileOperationService` for filesystem work. It does not import into a music library, call Forge, call cleanup, or delete files.
+
+Preview a fake approved staging apply without changing the filesystem:
+
+```bash
+noqlen-flux staging apply fake approved --workspace ./flux-workspace --dry-run
+```
+
+Apply mode must be explicit:
+
+```bash
+noqlen-flux staging apply fake approved --workspace ./flux-workspace --apply
+```
+
+`approved` targets `workspace/approved/import-ready`, `quarantine` targets `workspace/quarantine`, `rejected` targets `workspace/rejected`, and `review` stays manual under `workspace/review/manual` without automatic copy/move. `delete_eligible` is never a delete operation; real delete does not exist in Flux.
 
 ## Safe Workspace
 

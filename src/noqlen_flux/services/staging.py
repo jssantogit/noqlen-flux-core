@@ -181,6 +181,10 @@ def _compute_target_area_name(area: StagingArea) -> str:
 
 
 def _compute_target_relative(area: StagingArea, item_id: str) -> str:
+    if area == StagingArea.APPROVED:
+        return f"approved/import-ready/{item_id}"
+    if area == StagingArea.REVIEW:
+        return f"review/manual/{item_id}"
     area_name = _compute_target_area_name(area)
     return f"{area_name}/{item_id}"
 

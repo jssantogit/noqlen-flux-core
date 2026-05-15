@@ -61,6 +61,7 @@ def test_approved_routes_to_staging_area_approved() -> None:
 
     assert item.target_area == StagingArea.APPROVED
     assert item.action_type == StagingActionType.PLAN_ONLY
+    assert item.target_relative_path == "approved/import-ready/item-1"
 
 
 def test_quarantine_routes_to_staging_area_quarantine() -> None:
@@ -88,6 +89,7 @@ def test_review_routes_to_staging_area_review_by_default() -> None:
 
     assert item.target_area == StagingArea.REVIEW
     assert item.action_type == StagingActionType.PLAN_ONLY
+    assert item.target_relative_path == "review/manual/item-1"
 
 
 def test_delete_eligible_only_planned_if_policy_allows() -> None:

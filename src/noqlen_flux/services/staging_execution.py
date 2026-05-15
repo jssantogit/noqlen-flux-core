@@ -61,6 +61,19 @@ class StagingExecutionService(FluxService):
         apply_policy: RoutingApplyPolicy | None = None,
         staging_policy: StagingExecutionPolicy | None = None,
     ) -> FluxResult:
+        if not config.dry_run and (apply_policy is None or staging_policy is None):
+            return FluxResult(
+                operation=self.operation,
+                status=Status.FAILED,
+                errors=[
+                    FluxError(
+                        code="missing-apply-policy",
+                        message="Staging apply requires explicit routing apply and staging execution policies.",
+                    )
+                ],
+                summary={"required_policies": ["apply_policy", "staging_policy"]},
+            )
+
         selected_apply_policy = apply_policy or DEFAULT_ROUTING_APPLY_POLICY
         selected_staging_policy = staging_policy or DEFAULT_STAGING_EXECUTION_POLICY
 

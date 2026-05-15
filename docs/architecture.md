@@ -10,6 +10,16 @@ Future UI, controller, bridge, or mobile layers must not contain heavy workflow 
 
 The bootstrap repository intentionally has no network integration, `slskd` integration, database, auto-import, watch list, or real cleanup behavior.
 
+## Routing And Staging Apply Boundary
+
+`RoutingDecisionService` produces routing decisions only. It does not move, copy, delete, stage, import, clean up, or call Forge. `RoutingDecision` remains a contract object and cannot execute staging by itself.
+
+`StagingPlanService` maps routing decisions into `StagingPlan` contracts. Approved items target `approved/import-ready`, quarantine targets `quarantine`, rejected targets `rejected`, and review targets `review/manual` as manual plan-only state. `delete_eligible` remains a marker concept and never becomes deletion.
+
+`StagingExecutionService.apply_staging()` is the apply boundary. Apply mode requires explicit routing apply and staging execution policies, then delegates filesystem operations to `SafeFileOperationService`. Dry-run remains the default and returns `PlannedChange` entries. Apply returns `AppliedChange` only for safe workspace operations that actually ran.
+
+No staging service imports provider adapters, calls cleanup, calls handoff/Forge, or writes to a real music library.
+
 ## Search Domain Models
 
 Flux owns generic search models in the core domain: `SearchKind`, `SearchQuery`, `CandidateFile`, `SearchCandidate`, `SearchProviderResult`, and `ProviderHealth`. These names describe Flux concepts, not internal names from any external provider.

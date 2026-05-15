@@ -457,6 +457,23 @@ def test_apply_copy_with_overwrite_allowed(tmp_path) -> None:
     assert result.status == Status.SUCCESS
 
 
+def test_apply_copy_directory_overwrite_does_not_delete_existing_files(tmp_path) -> None:
+    service = SafeFileOperationService()
+    config = _config(tmp_path)
+    (tmp_path / "incoming" / "album").mkdir(parents=True)
+    (tmp_path / "approved" / "album").mkdir(parents=True)
+    (tmp_path / "incoming" / "album" / "track.txt").write_text("new content")
+    (tmp_path / "approved" / "album" / "keep.txt").write_text("keep")
+
+    policy = FileExecutionPolicy(name="test", version="1", description="test", allow_overwrite=True)
+    plan = _plan([_copy_op(source="incoming/album", target="approved/album")])
+    result = service.execute_plan(plan, config, dry_run=False, policy=policy)
+
+    assert result.status == Status.SUCCESS
+    assert (tmp_path / "approved" / "album" / "track.txt").read_text() == "new content"
+    assert (tmp_path / "approved" / "album" / "keep.txt").read_text() == "keep"
+
+
 def test_apply_returns_applied_change_for_real_operation(tmp_path) -> None:
     service = SafeFileOperationService()
     config = _config(tmp_path)

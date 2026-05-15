@@ -653,9 +653,25 @@ class TestApplyStaging:
         item = _staging_item(area=StagingArea.APPROVED)
         plan = _staging_plan([item])
 
-        result = service.apply_staging(plan, config)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=DEFAULT_ROUTING_APPLY_POLICY,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         assert (tmp_path / "approved" / "item-1.txt").exists()
+
+    def test_apply_staging_apply_requires_explicit_policies(self, tmp_path) -> None:
+        service = StagingExecutionService()
+        config = FluxConfig(workspace_root=tmp_path, dry_run=False)
+        item = _staging_item(area=StagingArea.APPROVED)
+        plan = _staging_plan([item])
+
+        result = service.apply_staging(plan, config)
+
+        assert result.status == Status.FAILED
+        assert "requires explicit" in result.errors[0].message
 
     def test_apply_staging_apply_generates_safety_report_on_success(self, tmp_path) -> None:
         service = StagingExecutionService()
@@ -666,7 +682,12 @@ class TestApplyStaging:
         item = _staging_item(area=StagingArea.APPROVED)
         plan = _staging_plan([item])
 
-        result = service.apply_staging(plan, config)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=DEFAULT_ROUTING_APPLY_POLICY,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         safety_report = result.summary.get("safety_report")
         assert safety_report is not None
@@ -679,7 +700,12 @@ class TestApplyStaging:
         item = _staging_item(area=StagingArea.DELETE_ELIGIBLE, action_type=StagingActionType.MARK_DELETE_ELIGIBLE)
         plan = _staging_plan([item])
 
-        result = service.apply_staging(plan, config)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=DEFAULT_ROUTING_APPLY_POLICY,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         assert result.status == Status.FAILED
         assert "delete_eligible" in str(result.summary.get("error", "")).lower()
@@ -699,7 +725,12 @@ class TestApplyStaging:
         item = _staging_item(area=StagingArea.DELETE_ELIGIBLE, action_type=StagingActionType.MARK_DELETE_ELIGIBLE)
         plan = _staging_plan([item])
 
-        result = service.apply_staging(plan, config, apply_policy=apply_policy)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=apply_policy,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         assert result.status == Status.SUCCESS
 
@@ -718,7 +749,12 @@ class TestApplyStaging:
         item = _staging_item(area=StagingArea.QUARANTINE)
         plan = _staging_plan([item])
 
-        result = service.apply_staging(plan, config, apply_policy=apply_policy)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=apply_policy,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         assert result.status == Status.FAILED
 
@@ -737,7 +773,12 @@ class TestApplyStaging:
         item = _staging_item(area=StagingArea.REJECTED)
         plan = _staging_plan([item])
 
-        result = service.apply_staging(plan, config, apply_policy=apply_policy)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=apply_policy,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         assert result.status == Status.FAILED
 
@@ -754,7 +795,12 @@ class TestApplyStaging:
         ]
         plan = _staging_plan(items)
 
-        result = service.apply_staging(plan, config)
+        result = service.apply_staging(
+            plan,
+            config,
+            apply_policy=DEFAULT_ROUTING_APPLY_POLICY,
+            staging_policy=DEFAULT_STAGING_EXECUTION_POLICY,
+        )
 
         assert result.status == Status.SUCCESS
         safety_report = result.summary.get("safety_report")

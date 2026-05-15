@@ -372,6 +372,7 @@ def test_staging_execute_fake_approved_dry_run_works(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert "staging-execution:" in output
     assert "mode: dry-run" in output
+    assert "approved/import-ready/apply-approved-item" in output
     assert not workspace.exists()
 
 
@@ -384,7 +385,8 @@ def test_staging_execute_fake_approved_apply_works(tmp_path, capsys) -> None:
     assert "staging-execution:" in output
     assert "mode: apply" in output
     assert (workspace / "incoming").is_dir()
-    assert (workspace / "approved").is_dir()
+    assert (workspace / "approved" / "import-ready").is_dir()
+    assert (workspace / "approved" / "import-ready" / "apply-approved-item").is_file()
 
 
 def test_staging_execute_fake_quarantine_dry_run_works(tmp_path, capsys) -> None:

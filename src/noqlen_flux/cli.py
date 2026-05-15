@@ -1534,11 +1534,9 @@ def run_staging_apply(args: argparse.Namespace) -> int:
         DEFAULT_ROUTING_APPLY_POLICY,
         DEFAULT_ROUTING_POLICY,
         RoutingActionType,
-        RoutingApplyPolicy,
         RoutingDecision,
         RoutingOutcome,
         RoutingPlan,
-        RoutingPolicy,
     )
     from noqlen_flux.services.staging import StagingPlanService
     from noqlen_flux.staging import (
@@ -1593,6 +1591,9 @@ def run_staging_apply(args: argparse.Namespace) -> int:
         area = StagingArea(item_data.get("target_area", "unknown"))
         if area == StagingArea.DELETE_ELIGIBLE:
             action_type = StagingActionType.MARK_DELETE_ELIGIBLE
+        elif area == StagingArea.REVIEW:
+            action_type = StagingActionType.PLAN_ONLY
+            source_relative = None
         else:
             action_type = StagingActionType.COPY
 

@@ -457,9 +457,7 @@ class SafeFileOperationService(FluxService):
         if resolved_source.is_file():
             shutil.copy2(str(resolved_source), str(resolved_target))
         elif resolved_source.is_dir():
-            if resolved_target.exists():
-                shutil.rmtree(str(resolved_target))
-            shutil.copytree(str(resolved_source), str(resolved_target))
+            shutil.copytree(str(resolved_source), str(resolved_target), dirs_exist_ok=policy.allow_overwrite)
         else:
             return FileOperationResult(
                 operation_id=operation.operation_id,
