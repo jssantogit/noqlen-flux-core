@@ -595,3 +595,217 @@ def test_audio_probe_service_does_not_import_routing_service() -> None:
     assert "RoutingService" not in source
     assert "RoutingDecisionService" not in source
     assert "routing" not in source.lower().split("from")[-1].split("import")[0]
+
+
+# ---------------------------------------------------------------------------
+# FfmpegProbeBackend tests (subprocess mocked, no real ffmpeg required)
+# ---------------------------------------------------------------------------
+
+
+from noqlen_flux.services.audio_probe import FfmpegProbeBackend
+from noqlen_flux.audio_probe import ProbeBackendKind
+
+
+@pytest.fixture
+def ffprobe_workspace(tmp_path: Path) -> Path:
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    return ws
+
+
+def _mock_subprocess_run(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    returncode: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+    raise_timeout: bool = False,
+    raise_filenotfound: bool = False,
+    raise_exception: bool = False,
+) -> None:
+    import subprocess
+
+    def mock_run(cmd, **kwargs):
+        if raise_timeout:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 30))
+        if raise_filenotfound:
+            raise FileNotFoundError("ffprobe not found")
+        if raise_exception:
+            raise RuntimeError("mock unexpected error")
+        return type("MockResult", (), {
+            "returncode": returncode,
+            "stdout": stdout.encode("utf-8") if isinstance(stdout, str) else stdout,
+            "stderr": stderr.encode("utf-8") if isinstance(stderr, str) else stderr,
+        })()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+
+def _valid_ffprobe_json() -> str:
+    import json
+    return json.dumps({
+        "streams": [
+            {
+                "index": 0,
+                "codec_name": "flac",
+                "codec_type": "audio",
+                "sample_rate": "44100",
+                "channels": 2,
+                "bits_per_raw_sample": "16",
+                "duration": "240.0",
+            }
+        ],
+        "format": {
+            "filename": "demo.flac",
+            "format_name": "flac",
+            "duration": "240.0",
+            "size": "12345678",
+            "bit_rate": "876543",
+        },
+    })
+
+
+def test_ffmpeg_probe_backend_kind() -> None:
+    backend = FfmpegProbeBackend()
+    assert backend.kind == ProbeBackendKind.FFPROBE.value
+
+
+def test_ffmpeg_probe_backend_is_available_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_subprocess_run(monkeypatch, returncode=0)
+    backend = FfmpegProbeBackend()
+    assert backend.is_available() is True
+
+
+def test_ffmpeg_probe_backend_not_available_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_subprocess_run(monkeypatch, returncode=1)
+    backend = FfmpegProbeBackend()
+    assert backend.is_available() is False
+
+
+def test_ffmpeg_probe_backend_decode_ok(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, returncode=0, stdout=_valid_ffprobe_json())
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "demo.flac")
+    assert result.success is True
+    assert result.decode_ok is True
+    assert result.has_audio_stream is True
+    assert result.duration_seconds == 240.0
+    assert result.sample_rate == 44100
+    assert result.codec == "flac"
+    assert result.channels == 2
+    assert result.bit_depth == 16
+
+
+def test_ffmpeg_probe_backend_no_audio_stream(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    import json
+    no_audio = json.dumps({
+        "streams": [{"codec_type": "video", "codec_name": "h264"}],
+        "format": {"duration": "120.0", "size": "500000"},
+    })
+    _mock_subprocess_run(monkeypatch, returncode=0, stdout=no_audio)
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "video_only.mp4")
+    assert result.success is False
+    assert result.has_audio_stream is False
+    assert any(f.code == "no-audio-stream" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_decode_failure(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, returncode=1, stderr="Invalid data found")
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "corrupt.flac")
+    assert result.success is False
+    assert result.decode_ok is False
+    assert any(f.code == "ffprobe-error" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_invalid_duration(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    import json
+    zero_duration = json.dumps({
+        "streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100"}],
+        "format": {"duration": "0.0", "size": "100"},
+    })
+    _mock_subprocess_run(monkeypatch, returncode=0, stdout=zero_duration)
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "empty.mp3")
+    assert result.success is False
+    assert any(f.code == "invalid-duration" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_corrupt_file(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, returncode=1, stderr="Corrupt file or unsupported format")
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "corrupt.wav")
+    assert result.success is False
+    assert len(result.errors) > 0
+
+
+def test_ffmpeg_probe_backend_timeout(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, raise_timeout=True)
+    backend = FfmpegProbeBackend(timeout_seconds=5)
+    result = backend.probe(ffprobe_workspace / "incoming" / "huge.wav", timeout_seconds=2)
+    assert result.success is False
+    assert any(f.code == "probe-timeout" for f in result.findings)
+    assert "timed out" in " ".join(result.errors).lower()
+
+
+def test_ffmpeg_probe_backend_ffprobe_missing(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, raise_filenotfound=True)
+    backend = FfmpegProbeBackend(ffprobe_path="/nonexistent/ffprobe")
+    result = backend.probe(ffprobe_workspace / "incoming" / "demo.wav")
+    assert result.success is False
+    assert any(f.code == "ffprobe-missing" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_invalid_json(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, returncode=0, stdout="not valid json {{{")
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "demo.wav")
+    assert result.success is False
+    assert any(f.code == "ffprobe-parse-error" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    _mock_subprocess_run(monkeypatch, raise_exception=True)
+    backend = FfmpegProbeBackend()
+    result = backend.probe(ffprobe_workspace / "incoming" / "demo.wav")
+    assert result.success is False
+    assert any(f.code == "probe-exception" for f in result.findings)
+
+
+def test_ffmpeg_probe_backend_does_not_move_or_delete_files(
+    monkeypatch: pytest.MonkeyPatch, ffprobe_workspace: Path
+) -> None:
+    file_path = ffprobe_workspace / "incoming" / "demo.flac"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("dummy audio content")
+    _mock_subprocess_run(monkeypatch, returncode=0, stdout=_valid_ffprobe_json())
+    backend = FfmpegProbeBackend()
+    backend.probe(file_path)
+    assert file_path.exists(), "ffprobe must not delete the file"
+
+
+def test_ffmpeg_probe_backend_no_network_access() -> None:
+    from noqlen_flux.services import audio_probe as mod
+    source = open(mod.__file__).read()
+    assert "urllib" not in source
+    assert "requests" not in source
+    assert "socket" not in source

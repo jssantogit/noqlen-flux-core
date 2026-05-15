@@ -184,6 +184,304 @@ class FakeProbeBackend(ProbeBackend):
         )
 
 
+class FfmpegProbeBackend(ProbeBackend):
+    def __init__(
+        self,
+        *,
+        ffprobe_path: str = "ffprobe",
+        timeout_seconds: int = 30,
+    ) -> None:
+        self._ffprobe_path = ffprobe_path
+        self._timeout_seconds = timeout_seconds
+
+    @property
+    def kind(self) -> str:
+        return ProbeBackendKind.FFPROBE.value
+
+    def is_available(self) -> bool:
+        import subprocess
+        try:
+            result = subprocess.run(
+                [self._ffprobe_path, "-version"],
+                capture_output=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def probe(self, file_path: Path, *, timeout_seconds: int = 30) -> AudioProbeResult:
+        import json
+        import subprocess
+
+        request_id = str(uuid.uuid4())
+        item_id = str(file_path.stem)
+        effective_timeout = min(timeout_seconds, self._timeout_seconds)
+
+        try:
+            cmd = [
+                self._ffprobe_path,
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                "-show_streams",
+                str(file_path),
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=effective_timeout,
+            )
+
+            if result.returncode != 0:
+                stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
+                return AudioProbeResult(
+                    request_id=request_id,
+                    item_id=item_id,
+                    relative_path=str(file_path),
+                    backend=self.kind,
+                    success=False,
+                    findings=[
+                        AudioProbeFinding(
+                            code="ffprobe-error",
+                            message=f"ffprobe returned non-zero exit code: {stderr_text[:200] if stderr_text else str(result.returncode)}",
+                            category="objective_failure",
+                            confidence=1.0,
+                        )
+                    ],
+                    errors=[f"ffprobe error: {stderr_text[:200] if stderr_text else 'exit code ' + str(result.returncode)}"],
+                )
+
+            data = json.loads(result.stdout.decode("utf-8"))
+
+            return self._parse_ffprobe_output(data, file_path, request_id, item_id)
+
+        except subprocess.TimeoutExpired:
+            return AudioProbeResult(
+                request_id=request_id,
+                item_id=item_id,
+                relative_path=str(file_path),
+                backend=self.kind,
+                success=False,
+                findings=[
+                    AudioProbeFinding(
+                        code="probe-timeout",
+                        message=f"ffprobe timed out after {effective_timeout}s.",
+                        category="objective_failure",
+                        confidence=1.0,
+                    )
+                ],
+                errors=[f"ffprobe timed out after {effective_timeout}s"],
+            )
+        except FileNotFoundError:
+            return AudioProbeResult(
+                request_id=request_id,
+                item_id=item_id,
+                relative_path=str(file_path),
+                backend=self.kind,
+                success=False,
+                findings=[
+                    AudioProbeFinding(
+                        code="ffprobe-missing",
+                        message=f"ffprobe not found at '{self._ffprobe_path}'. ffmpeg/ffprobe is optional and must be installed separately.",
+                        category="objective_failure",
+                        confidence=1.0,
+                    )
+                ],
+                errors=[f"ffprobe not found: {self._ffprobe_path}"],
+            )
+        except json.JSONDecodeError:
+            return AudioProbeResult(
+                request_id=request_id,
+                item_id=item_id,
+                relative_path=str(file_path),
+                backend=self.kind,
+                success=False,
+                findings=[
+                    AudioProbeFinding(
+                        code="ffprobe-parse-error",
+                        message="ffprobe output could not be parsed as JSON.",
+                        category="objective_failure",
+                        confidence=1.0,
+                    )
+                ],
+                errors=["ffprobe output parse error"],
+            )
+        except Exception as exc:
+            return AudioProbeResult(
+                request_id=request_id,
+                item_id=item_id,
+                relative_path=str(file_path),
+                backend=self.kind,
+                success=False,
+                findings=[
+                    AudioProbeFinding(
+                        code="probe-exception",
+                        message=f"Unexpected error during probe: {str(exc)[:200]}",
+                        category="objective_failure",
+                        confidence=1.0,
+                    )
+                ],
+                errors=[f"Probe exception: {str(exc)[:200]}"],
+            )
+
+    def _parse_ffprobe_output(
+        self,
+        data: dict[str, Any],
+        file_path: Path,
+        request_id: str,
+        item_id: str,
+    ) -> AudioProbeResult:
+        fmt = data.get("format", {})
+        streams = data.get("streams", [])
+        if not isinstance(streams, list):
+            streams = []
+
+        audio_streams = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"]
+        has_audio_stream = len(audio_streams) > 0
+
+        duration_raw = fmt.get("duration")
+        duration = None
+        if isinstance(duration_raw, str):
+            try:
+                duration = float(duration_raw)
+            except (ValueError, TypeError):
+                duration = None
+        elif isinstance(duration_raw, (int, float)):
+            duration = float(duration_raw)
+
+        file_size = fmt.get("size")
+        if isinstance(file_size, str):
+            try:
+                file_size = int(file_size)
+            except (ValueError, TypeError):
+                file_size = None
+
+        sample_rate = None
+        bit_depth = None
+        codec = None
+        channels = None
+        bitrate = None
+
+        if audio_streams:
+            first_audio = audio_streams[0]
+            sr = first_audio.get("sample_rate")
+            if isinstance(sr, str):
+                try:
+                    sample_rate = int(sr)
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(sr, (int, float)):
+                sample_rate = int(sr)
+
+            bd = first_audio.get("bits_per_raw_sample") or first_audio.get("bits_per_sample")
+            if isinstance(bd, str):
+                try:
+                    bit_depth = int(bd)
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(bd, (int, float)):
+                bit_depth = int(bd)
+
+            codec = first_audio.get("codec_name") or first_audio.get("codec")
+            if isinstance(codec, str):
+                codec = codec.lower().strip()
+
+            ch = first_audio.get("channels")
+            if isinstance(ch, str):
+                try:
+                    channels = int(ch)
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(ch, (int, float)):
+                channels = int(ch)
+
+        br = fmt.get("bit_rate")
+        if isinstance(br, str):
+            try:
+                bitrate = int(br)
+            except (ValueError, TypeError):
+                pass
+        elif isinstance(br, (int, float)):
+            bitrate = int(br)
+
+        findings: list[AudioProbeFinding] = []
+        warnings: list[str] = []
+        errors: list[str] = []
+
+        decode_ok = True
+        success = True
+
+        if not has_audio_stream:
+            findings.append(
+                AudioProbeFinding(
+                    code="no-audio-stream",
+                    message="No audio stream found in file.",
+                    category="objective_failure",
+                    confidence=1.0,
+                )
+            )
+            errors.append("No audio stream found")
+            decode_ok = False
+            success = False
+
+        if duration is not None and duration <= 0:
+            findings.append(
+                AudioProbeFinding(
+                    code="invalid-duration",
+                    message=f"Invalid or zero duration: {duration}s.",
+                    category="objective_failure",
+                    confidence=1.0,
+                )
+            )
+            errors.append(f"Invalid duration: {duration}")
+            success = False
+
+        if file_size is not None and file_size <= 0:
+            findings.append(
+                AudioProbeFinding(
+                    code="zero-byte-file",
+                    message="File appears to be empty or zero bytes.",
+                    category="objective_failure",
+                    confidence=1.0,
+                )
+            )
+            errors.append("Zero-byte file detected")
+            success = False
+
+        if not findings:
+            findings.append(
+                AudioProbeFinding(
+                    code="probe-ok",
+                    message="ffprobe completed successfully.",
+                    category="diagnostic",
+                    confidence=1.0,
+                )
+            )
+
+        return AudioProbeResult(
+            request_id=request_id,
+            item_id=item_id,
+            relative_path=str(file_path),
+            backend=self.kind,
+            success=success,
+            duration_seconds=duration,
+            sample_rate=sample_rate,
+            bit_depth=bit_depth,
+            codec=codec,
+            bitrate_bps=bitrate,
+            channels=channels,
+            file_size_bytes=file_size,
+            decode_ok=decode_ok,
+            has_audio_stream=has_audio_stream,
+            stream_count=len(streams),
+            audio_stream_count=len(audio_streams),
+            findings=findings,
+            warnings=warnings,
+            errors=errors,
+        )
+
+
 class AudioProbeService(FluxService):
     operation = "audio-probe"
 
