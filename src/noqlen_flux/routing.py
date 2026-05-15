@@ -109,3 +109,54 @@ DEFAULT_ROUTING_POLICY = RoutingPolicy(
 
 def default_routing_policy() -> RoutingPolicy:
     return DEFAULT_ROUTING_POLICY
+
+
+@dataclass(slots=True, frozen=True)
+class RoutingApplyPolicy:
+    name: str
+    version: str
+    description: str
+    dry_run_default: bool = True
+    apply_explicit: bool = True
+    allow_move_to_approved: bool = True
+    allow_move_to_quarantine: bool = True
+    allow_move_to_rejected: bool = True
+    allow_delete_eligible: bool = False
+    allow_mark_delete_eligible: bool = False
+    allow_review_manual_only: bool = True
+    workspace_only: bool = True
+    block_absolute_path: bool = True
+    block_traversal: bool = True
+    block_symlink_escape: bool = True
+    block_protected_roots: bool = True
+    generate_safety_report: bool = True
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+
+DEFAULT_ROUTING_APPLY_POLICY = RoutingApplyPolicy(
+    name="default_apply_v1",
+    version="1",
+    description="Default routing apply policy. Dry-run by default, apply must be explicit. No delete. Workspace-only. All path safety enforced.",
+    dry_run_default=True,
+    apply_explicit=True,
+    allow_move_to_approved=True,
+    allow_move_to_quarantine=True,
+    allow_move_to_rejected=True,
+    allow_delete_eligible=False,
+    allow_mark_delete_eligible=False,
+    allow_review_manual_only=True,
+    workspace_only=True,
+    block_absolute_path=True,
+    block_traversal=True,
+    block_symlink_escape=True,
+    block_protected_roots=True,
+    generate_safety_report=True,
+    metadata={"stage": "post-download", "status": "apply-foundation"},
+)
+
+
+def default_routing_apply_policy() -> RoutingApplyPolicy:
+    return DEFAULT_ROUTING_APPLY_POLICY

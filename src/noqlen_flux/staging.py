@@ -142,3 +142,75 @@ DEFAULT_STAGING_POLICY = StagingPolicy(
 
 def default_staging_policy() -> StagingPolicy:
     return DEFAULT_STAGING_POLICY
+
+
+@dataclass(slots=True, frozen=True)
+class StagingApplyReport:
+    report_id: str
+    source_staging_plan_id: str
+    mode: str
+    timestamp: str
+    policy_name: str
+    total_items: int
+    planned_count: int
+    applied_count: int
+    blocked_count: int
+    skipped_count: int
+    failed_count: int
+    operations: list[dict[str, Any]] = field(default_factory=list)
+    safety_checks: list[dict[str, Any]] = field(default_factory=list)
+    blocked_operations: list[dict[str, Any]] = field(default_factory=list)
+    skipped_operations: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    metadata: SafeMetadata = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _clean(asdict(self))
+
+    @classmethod
+    def from_execution_result(
+        cls,
+        report_id: str,
+        source_staging_plan_id: str,
+        mode: str,
+        timestamp: str,
+        policy_name: str,
+        total_items: int,
+        planned_count: int,
+        applied_count: int,
+        blocked_count: int,
+        skipped_count: int,
+        failed_count: int,
+        *,
+        operations: list[dict[str, Any]] | None = None,
+        safety_checks: list[dict[str, Any]] | None = None,
+        blocked_operations: list[dict[str, Any]] | None = None,
+        skipped_operations: list[dict[str, Any]] | None = None,
+        warnings: list[str] | None = None,
+        errors: list[str] | None = None,
+        notes: list[str] | None = None,
+        metadata: SafeMetadata | None = None,
+    ) -> StagingApplyReport:
+        return cls(
+            report_id=report_id,
+            source_staging_plan_id=source_staging_plan_id,
+            mode=mode,
+            timestamp=timestamp,
+            policy_name=policy_name,
+            total_items=total_items,
+            planned_count=planned_count,
+            applied_count=applied_count,
+            blocked_count=blocked_count,
+            skipped_count=skipped_count,
+            failed_count=failed_count,
+            operations=operations or [],
+            safety_checks=safety_checks or [],
+            blocked_operations=blocked_operations or [],
+            skipped_operations=skipped_operations or [],
+            warnings=warnings or [],
+            errors=errors or [],
+            notes=notes or [],
+            metadata=metadata or {},
+        )
