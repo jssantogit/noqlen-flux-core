@@ -71,6 +71,35 @@ def build_parser() -> argparse.ArgumentParser:
     search_fake_album.add_argument("--score", action="store_true", help="Include explainable pre-download scoring")
     search_fake_album.set_defaults(func=run_search_fake_album)
 
+    search_slskd = search_subparsers.add_parser("slskd", help="Search via slskd provider (offline by default)")
+    search_slskd_subparsers = search_slskd.add_subparsers(dest="search_kind")
+
+    search_slskd_track = search_slskd_subparsers.add_parser("track", help="Search a track via slskd")
+    search_slskd_track.add_argument("--artist", required=True, help="Artist name")
+    search_slskd_track.add_argument("--title", required=True, help="Track title")
+    search_slskd_track.add_argument("--limit", type=int, help="Optional positive result limit")
+    search_slskd_track.add_argument("--score", action="store_true", help="Include explainable pre-download scoring")
+    search_slskd_track.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    search_slskd_track.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    search_slskd_track.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    search_slskd_track.add_argument("--allow-network", action="store_true", help="Allow network access for real search")
+    search_slskd_track.add_argument("--timeout", type=int, help="HTTP timeout in seconds (default 5)")
+    search_slskd_track.add_argument("--max-polls", type=int, help="Maximum poll attempts (default 10)")
+    search_slskd_track.set_defaults(func=run_search_slskd_track)
+
+    search_slskd_album = search_slskd_subparsers.add_parser("album", help="Search an album via slskd")
+    search_slskd_album.add_argument("--artist", required=True, help="Artist name")
+    search_slskd_album.add_argument("--album", required=True, help="Album title")
+    search_slskd_album.add_argument("--limit", type=int, help="Optional positive result limit")
+    search_slskd_album.add_argument("--score", action="store_true", help="Include explainable pre-download scoring")
+    search_slskd_album.add_argument("--offline", action="store_true", help="Force offline mode (default)")
+    search_slskd_album.add_argument("--url", help="Slskd base URL (requires --allow-network)")
+    search_slskd_album.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
+    search_slskd_album.add_argument("--allow-network", action="store_true", help="Allow network access for real search")
+    search_slskd_album.add_argument("--timeout", type=int, help="HTTP timeout in seconds (default 5)")
+    search_slskd_album.add_argument("--max-polls", type=int, help="Maximum poll attempts (default 10)")
+    search_slskd_album.set_defaults(func=run_search_slskd_album)
+
     musiclab = subparsers.add_parser("musiclab", help="Inspect or initialize isolated MusicLab calibration state")
     musiclab_subparsers = musiclab.add_subparsers(dest="musiclab_command")
 
@@ -304,6 +333,47 @@ def run_search_fake_album(args: argparse.Namespace) -> int:
     result = SearchService().search(query, _demo_fake_provider(), _scoring_service(args))
     print(_render_result(result))
     return _exit_code(result.status)
+
+
+def run_search_slskd_track(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.TRACK, artist=args.artist, title=args.title, limit=args.limit)
+    provider = _resolve_slskd_provider(args)
+    result = SearchService().search(query, provider, _scoring_service(args))
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_search_slskd_album(args: argparse.Namespace) -> int:
+    query = SearchQuery(kind=SearchKind.ALBUM, artist=args.artist, album=args.album, limit=args.limit)
+    provider = _resolve_slskd_provider(args)
+    result = SearchService().search(query, provider, _scoring_service(args))
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def _resolve_slskd_provider(args: argparse.Namespace):
+    """Instantiate SlskdProvider for CLI search commands.
+
+    Network access is disabled by default. --allow-network is required
+    for real search. API key must come from an environment variable.
+    """
+    from noqlen_flux.providers.slskd import SlskdProvider, SlskdProviderConfig
+
+    allow_network = getattr(args, "allow_network", False)
+    url = getattr(args, "url", None)
+    api_key_env = getattr(args, "api_key_env", None)
+    api_key = os.environ.get(api_key_env) if api_key_env else None
+    timeout = getattr(args, "timeout", None) or 5
+    max_polls = getattr(args, "max_polls", None) or 10
+
+    config = SlskdProviderConfig(
+        base_url=url,
+        api_key=api_key,
+        allow_network=allow_network,
+        timeout_seconds=timeout,
+        max_poll_attempts=max_polls,
+    )
+    return SlskdProvider(config=config)
 
 
 def run_musiclab_inspect(args: argparse.Namespace) -> int:
@@ -981,6 +1051,36 @@ def _render_result(result: FluxResult) -> str:
         total_bytes = result.summary.get("total_planned_bytes")
         if total_bytes is not None:
             lines.append(f"planned-bytes: {total_bytes}")
+    if result.operation == "search" and result.summary.get("provider") == "slskd":
+        response_count = result.summary.get("response_count")
+        if response_count is not None:
+            lines.append(f"responses: {response_count}")
+        timeout_flag = result.summary.get("timeout_reached")
+        if timeout_flag:
+            lines.append("timeout: poll limit reached")
+        candidates = result.summary.get("candidates", [])
+        for c in candidates:
+            lines.append(f"  candidate: {c.get('candidate_id', '?')}")
+            if c.get("username"):
+                lines.append(f"    user: {c['username']}")
+            if c.get("directory"):
+                lines.append(f"    dir: {c['directory']}")
+            files = c.get("files", [])
+            locked_count = sum(1 for f in files if f.get("locked"))
+            lines.append(f"    files: {len(files)} ({locked_count} locked)")
+            for f in files:
+                lock_tag = " [locked]" if f.get("locked") else ""
+                parts = [f"      {f.get('filename', '?')}"]
+                if f.get("extension"):
+                    parts[-1] += f" .{f['extension']}"
+                if f.get("size_bytes") is not None:
+                    parts.append(f"size={f['size_bytes']}")
+                if f.get("declared_bitrate") is not None:
+                    parts.append(f"bitrate={f['declared_bitrate']}")
+                if f.get("duration_seconds") is not None:
+                    parts.append(f"duration={f['duration_seconds']}s")
+                parts[-1] += lock_tag
+                lines.append("".join(parts))
     if result.operation == "musiclab-scoring":
         dataset_id = result.summary.get("dataset_id")
         if dataset_id is not None:

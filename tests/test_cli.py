@@ -449,3 +449,315 @@ def test_handoff_validate_demo_works(capsys) -> None:
 
     output = capsys.readouterr().out
     assert "handoff: valid" in output
+
+
+# --- Slskd search CLI tests ---
+
+
+def test_search_slskd_track_offline_returns_error(capsys) -> None:
+    assert main(["search", "slskd", "track", "--artist", "Example Artist", "--title", "Example Track", "--offline"]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_album_offline_returns_error(capsys) -> None:
+    assert main(["search", "slskd", "album", "--artist", "Example Artist", "--album", "Example Album", "--offline"]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_track_default_is_offline(capsys) -> None:
+    assert main(["search", "slskd", "track", "--artist", "Example Artist", "--title", "Example Track"]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_album_default_is_offline(capsys) -> None:
+    assert main(["search", "slskd", "album", "--artist", "Example Artist", "--album", "Example Album"]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_track_allow_network_no_url_returns_error(capsys) -> None:
+    assert main(["search", "slskd", "track", "--artist", "Example Artist", "--title", "Example Track", "--allow-network"]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_album_allow_network_no_url_returns_error(capsys) -> None:
+    assert main(["search", "slskd", "album", "--artist", "Example Artist", "--album", "Example Album", "--allow-network"]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_track_api_key_not_printed(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("TEST_SLSKD_KEY", "super-secret-key-12345")
+
+    assert main([
+        "search", "slskd", "track",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--api-key-env", "TEST_SLSKD_KEY",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "super-secret-key-12345" not in output
+
+
+def test_search_slskd_album_api_key_not_printed(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("TEST_SLSKD_KEY", "super-secret-key-12345")
+
+    assert main([
+        "search", "slskd", "album",
+        "--artist", "Example Artist",
+        "--album", "Example Album",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--api-key-env", "TEST_SLSKD_KEY",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "super-secret-key-12345" not in output
+
+
+def test_search_slskd_track_with_score_offline(capsys) -> None:
+    assert main([
+        "search", "slskd", "track",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--offline",
+        "--score",
+    ]) == 1
+
+    output = capsys.readouterr().out
+    assert "search: failed" in output
+    assert "no active client" in output.lower()
+
+
+def test_search_slskd_track_mocked_network_succeeds(capsys, monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        import json
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(json.dumps({
+                "responses": [
+                    {
+                        "username": "test-user",
+                        "directory": "Music/Test",
+                        "files": [{"filename": "test.flac", "size": 1000, "bitrate": 320, "extension": "flac", "duration": 180}],
+                        "locked_files": [],
+                    }
+                ],
+                "response_count": 1,
+            }).encode())
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    assert main([
+        "search", "slskd", "track",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "test-user" in output
+    assert "test.flac" in output
+    assert ".flac" in output
+
+
+def test_search_slskd_album_mocked_network_succeeds(capsys, monkeypatch) -> None:
+    import json
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(json.dumps({
+                "responses": [
+                    {
+                        "username": "album-user",
+                        "directory": "Music/Artist/Album",
+                        "files": [
+                            {"filename": "01 Intro.flac", "size": 1000},
+                            {"filename": "02 Track.flac", "size": 2000},
+                        ],
+                        "locked_files": [
+                            {"filename": "03 Locked.flac", "size": 3000},
+                        ],
+                    }
+                ],
+                "response_count": 1,
+            }).encode())
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    assert main([
+        "search", "slskd", "album",
+        "--artist", "Example Artist",
+        "--album", "Example Album",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "album-user" in output
+    assert "01 Intro.flac" in output
+    assert "02 Track.flac" in output
+    assert "03 Locked.flac" in output
+    assert "1 locked" in output
+
+
+def test_search_slskd_track_mocked_with_score(capsys, monkeypatch) -> None:
+    import json
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(json.dumps({
+                "responses": [
+                    {
+                        "username": "score-user",
+                        "directory": "Music/Test",
+                        "files": [{"filename": "track.flac", "size": 1000}],
+                        "locked_files": [],
+                    }
+                ],
+                "response_count": 1,
+            }).encode())
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    assert main([
+        "search", "slskd", "track",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--score",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "search: success" in output
+    assert "score:" in output
+
+
+def test_search_slskd_track_mocked_timeout(capsys, monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" not in str(req.full_url):
+            return FakeResponse(b'{"state": "InProgress"}')
+        return FakeResponse(b'{"responses": [], "response_count": 0}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    assert main([
+        "search", "slskd", "track",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+        "--max-polls", "2",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "search:" in output
+    assert "timeout" in output.lower() or "warning" in output.lower()
+
+
+def test_search_slskd_track_mocked_empty_responses(capsys, monkeypatch) -> None:
+    import json
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return FakeResponse(b'{"id": "search-1"}')
+        if req.method == "GET" and "responses" in str(req.full_url):
+            return FakeResponse(b'{"responses": [], "response_count": 0}')
+        return FakeResponse(b'{"state": "Completed"}')
+
+    monkeypatch.setattr("noqlen_flux.providers.slskd.urlopen", fake_urlopen)
+
+    assert main([
+        "search", "slskd", "track",
+        "--artist", "Example Artist",
+        "--title", "Example Track",
+        "--allow-network",
+        "--url", "http://localhost:5000",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "search:" in output
+    assert "no candidates" in output.lower() or "responses: 0" in output

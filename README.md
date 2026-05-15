@@ -23,7 +23,7 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Download planning models and services that transform candidates into structured plans without executing transfers.
 - Transfer and queue planning models and services that transform download plans into structured queue plans without executing transfers.
 - Generic `TransferProvider` contract for future provider adapters (slskd, NativeSoulseekProvider).
-- Slskd adapter (`providers/slskd.py`) with offline/injected-client search flow, bounded polling, fake client, opt-in health client, and opt-in search client. Network access is disabled by default. Real slskd download/queue/transfer are not implemented yet.
+- Slskd adapter (`providers/slskd.py`) with offline/injected-client search flow, bounded polling, fake client, opt-in health client, and opt-in search client. CLI search preview commands (`search slskd track/album`) are offline by default. Network access is disabled by default. Real slskd download/queue/transfer are not implemented yet.
 - Provider health, capabilities, and status models with a generic `BaseProvider` interface.
 - `ProviderService` for inspecting provider health and validating capabilities without network access.
 - Post-download quality result contracts and fake simulation service (`QualityGrade`, `QualityFinding`, `QualityResult`, `QualityProfile`, `QualitySummary`).
@@ -136,7 +136,33 @@ Run a safe fake album search with a multi-file candidate:
 noqlen-flux search fake album --artist "Example Artist" --album "Example Album"
 ```
 
-The fake provider is for tests and demonstrations only. `slskd` is not implemented yet and must remain isolated as a future external provider adapter, replaceable by a future native Soulseek provider without rewriting the core service layer.
+The fake provider is for tests and demonstrations only.
+
+### Slskd Search Preview
+
+The CLI includes a controlled slskd search preview for listing candidates before any download workflow exists. Network access is disabled by default; `--allow-network` is required for real search.
+
+Preview a track search offline (returns a controlled error without network):
+
+```bash
+noqlen-flux search slskd track --artist "Example Artist" --title "Example Track" --offline
+```
+
+Preview an album search offline:
+
+```bash
+noqlen-flux search slskd album --artist "Example Artist" --album "Example Album" --offline
+```
+
+Real network search requires explicit opt-in and a running slskd instance:
+
+```bash
+noqlen-flux search slskd track --artist "Artist" --title "Track" --url http://localhost:5000 --api-key-env SLSKD_API_KEY --allow-network
+```
+
+Search results show candidate_id, provider, username, directory, file count, locked files, filenames, extensions, sizes, declared bitrate, and duration. Optional `--score` adds pre-download risk scoring.
+
+Real download, queue, and transfer are not implemented yet. The slskd adapter is isolated and replaceable by a future `NativeSoulseekProvider`.
 
 ## Candidate Scoring Foundation
 

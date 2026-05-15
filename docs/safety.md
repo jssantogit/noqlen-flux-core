@@ -126,6 +126,19 @@ The `SlskdProvider` adapter under `providers/slskd.py` is an external adapter, n
 - Search never downloads files, creates files, or writes to the filesystem.
 - Download, queue, and transfer are not implemented in this adapter.
 
+### Slskd Search CLI
+
+The `search slskd` CLI commands provide a preview of search results without downloading or writing files.
+
+- slskd search CLI is offline/no-network by default.
+- Real network search requires explicit `--allow-network`.
+- API key should come from environment variable via `--api-key-env`, never as a literal argument.
+- Search preview never downloads files.
+- Search preview never writes files or touches the filesystem.
+- Tests must use offline/fake clients; no real network access in automated tests.
+- The CLI is the only layer that instantiates `SlskdProvider`; core services remain provider-agnostic.
+- Output must not contain raw provider payloads, API keys, tokens, headers, or personal absolute paths.
+
 ## Search Providers
 
 Automated search tests must use fake providers or controlled fixtures. Real network access, real `slskd`, native Soulseek sessions, credentials, live provider APIs, and real downloads are prohibited in automated search tests.
