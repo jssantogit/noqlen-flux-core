@@ -1,6 +1,7 @@
 """Service layer entry points for Noqlen Flux Core."""
 
 from .artifact_registration import ArtifactRegistrationService
+from .audio_probe import AudioProbeService
 from .base import FluxService
 from .cleanup import CleanupPlanningService
 from .doctor import DoctorService
@@ -25,6 +26,7 @@ from .workspace import WorkspaceService
 
 __all__ = [
     "ArtifactRegistrationService",
+    "AudioProbeService",
     "CandidateScoringService",
     "CleanupPlanningService",
     "DoctorService",
