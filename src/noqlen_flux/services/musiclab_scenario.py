@@ -23,6 +23,7 @@ from noqlen_flux.musiclab_scenario import (
 )
 from noqlen_flux.musiclab_scenario_factory import (
     SyntheticFixture,
+    SyntheticProbeProfile,
     build_probe_findings,
 )
 from noqlen_flux.musiclab_scenario_packs import (
@@ -386,11 +387,13 @@ class MusicLabScenarioRunnerService(FluxService):
             objective_failure_codes = [f.code for f in objective_failures]
             heuristic_warning_codes = [f.code for f in heuristic_warnings]
 
+            derived_grade = _derive_grade_from_findings(fixture.probe, objective_failures, heuristic_warnings)
+
             try:
                 quality_result = self._quality_service.evaluate_fake_quality(
                     item_id=fixture.fixture_id,
                     relative_path=f"incoming/fake/{fixture.fixture_id}/track.{fixture.probe.format_name}",
-                    grade=None,
+                    grade=derived_grade.value,
                     findings=findings_dicts,
                 )
                 actual_grade = quality_result.summary.get("grade", QualityGrade.UNKNOWN.value)
@@ -647,3 +650,19 @@ def _validate_critical_rules(
         if actual_routing == RoutingOutcome.REJECTED.value:
             errors.append("CRITICAL: qobuz_like_cutoff was rejected. Must not be auto-rejected.")
             regression_notes.append("qobuz-like-auto-rejected")
+
+
+def _derive_grade_from_findings(
+    probe: SyntheticProbeProfile,
+    objective_failures: list[Any],
+    heuristic_warnings: list[Any],
+) -> QualityGrade:
+    if objective_failures:
+        return QualityGrade.BAD
+    if heuristic_warnings:
+        return QualityGrade.MEDIUM
+    if not probe.probe_success and not objective_failures:
+        return QualityGrade.UNKNOWN
+    if not probe.has_audio_stream or not probe.decode_ok:
+        return QualityGrade.BAD
+    return QualityGrade.EXCELLENT

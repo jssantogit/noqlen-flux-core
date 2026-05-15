@@ -60,6 +60,16 @@ class SyntheticFixture:
 def build_probe_findings(probe: SyntheticProbeProfile) -> list[QualityFinding]:
     findings: list[QualityFinding] = []
 
+    if probe.file_size_bytes == 0:
+        findings.append(
+            QualityFinding(
+                code="zero-byte-file",
+                message="File is zero bytes.",
+                kind=QualityFindingKind.OBJECTIVE_FAILURE,
+                severity=QualityFindingSeverity.ERROR,
+            )
+        )
+
     if not probe.probe_success:
         findings.append(
             QualityFinding(
@@ -69,23 +79,14 @@ def build_probe_findings(probe: SyntheticProbeProfile) -> list[QualityFinding]:
                 severity=QualityFindingSeverity.ERROR,
             )
         )
-        return findings
+        if probe.file_size_bytes != 0:
+            return findings
 
     if not probe.has_audio_stream:
         findings.append(
             QualityFinding(
                 code="no-audio-stream",
                 message="File contains no audio stream.",
-                kind=QualityFindingKind.OBJECTIVE_FAILURE,
-                severity=QualityFindingSeverity.ERROR,
-            )
-        )
-
-    if probe.file_size_bytes == 0:
-        findings.append(
-            QualityFinding(
-                code="zero-byte-file",
-                message="File is zero bytes.",
                 kind=QualityFindingKind.OBJECTIVE_FAILURE,
                 severity=QualityFindingSeverity.ERROR,
             )

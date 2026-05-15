@@ -150,6 +150,24 @@ def build_parser() -> argparse.ArgumentParser:
     musiclab_quality_run = musiclab_quality_subparsers.add_parser("run", help="Run quality calibration against default fake dataset")
     musiclab_quality_run.set_defaults(func=run_musiclab_quality_run)
 
+    musiclab_scenario = musiclab_subparsers.add_parser("scenario", help="Run real-world scenario engine")
+    musiclab_scenario_subparsers = musiclab_scenario.add_subparsers(dest="musiclab_scenario_command")
+
+    musiclab_scenario_list = musiclab_scenario_subparsers.add_parser("list", help="List all available MusicLab scenarios")
+    musiclab_scenario_list.set_defaults(func=run_musiclab_scenario_list)
+
+    musiclab_scenario_run = musiclab_scenario_subparsers.add_parser("run", help="Run a single MusicLab scenario")
+    musiclab_scenario_run.add_argument("--scenario", required=True, help="Scenario ID to run")
+    musiclab_scenario_run.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_scenario_run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
+    musiclab_scenario_run.set_defaults(func=run_musiclab_scenario_run)
+
+    musiclab_scenario_run_pack = musiclab_scenario_subparsers.add_parser("run-pack", help="Run a MusicLab scenario pack")
+    musiclab_scenario_run_pack.add_argument("--pack", required=True, help="Pack ID to run")
+    musiclab_scenario_run_pack.add_argument("--workspace", required=True, help="Workspace root path")
+    musiclab_scenario_run_pack.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
+    musiclab_scenario_run_pack.set_defaults(func=run_musiclab_scenario_run_pack)
+
     download = subparsers.add_parser("download", help="Plan safe download operations")
     download_subparsers = download.add_subparsers(dest="download_command")
 
@@ -561,6 +579,38 @@ def run_musiclab_quality_run(_args: argparse.Namespace) -> int:
     from noqlen_flux.services import MusicLabQualityService
 
     result = MusicLabQualityService().run_calibration()
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_scenario_list(_args: argparse.Namespace) -> int:
+    from noqlen_flux.services import MusicLabScenarioRunnerService
+
+    result = MusicLabScenarioRunnerService().list_scenarios()
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_scenario_run(args: argparse.Namespace) -> int:
+    from noqlen_flux.services import MusicLabScenarioRunnerService
+
+    result = MusicLabScenarioRunnerService().run_scenario(
+        scenario_id=args.scenario,
+        workspace_root=args.workspace,
+        dry_run=args.dry_run,
+    )
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_musiclab_scenario_run_pack(args: argparse.Namespace) -> int:
+    from noqlen_flux.services import MusicLabScenarioRunnerService
+
+    result = MusicLabScenarioRunnerService().run_pack(
+        pack_id=args.pack,
+        workspace_root=args.workspace,
+        dry_run=args.dry_run,
+    )
     print(_render_result(result))
     return _exit_code(result.status)
 
