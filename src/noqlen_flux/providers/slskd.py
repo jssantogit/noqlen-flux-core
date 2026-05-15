@@ -20,7 +20,7 @@ from typing import Any, Protocol
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from noqlen_flux.providers.base import SearchProvider
+from noqlen_flux.providers.base import QueueExecutionProvider, SearchProvider
 from noqlen_flux.providers.status import (
     ProviderAvailability,
     ProviderCapability,
@@ -34,6 +34,16 @@ from noqlen_flux.search import (
     SearchKind,
     SearchProviderResult,
     SearchQuery,
+)
+from noqlen_flux.transfers import (
+    QueueItem,
+    QueuePlan,
+    TransferExecutionMode,
+    TransferExecutionRequest,
+    TransferItem,
+    TransferSubmissionItem,
+    TransferSubmissionResult,
+    TransferSubmissionState,
 )
 
 _logger = logging.getLogger(__name__)
@@ -144,6 +154,10 @@ class FakeSlskdClient:
     - controlled errors
     - locked files
     - multi-file album responses
+
+    Queue submission (offline/fake):
+    - success, failed, duplicate, locked, user_offline, invalid_item,
+      provider_unavailable
     """
 
     def __init__(
@@ -156,6 +170,12 @@ class FakeSlskdClient:
         raise_on_start: bool = False,
         raise_on_state: bool = False,
         raise_on_responses: bool = False,
+        queue_simulate_failures: bool = False,
+        queue_simulate_duplicate: bool = False,
+        queue_simulate_locked: bool = False,
+        queue_simulate_user_offline: bool = False,
+        queue_simulate_invalid_item: bool = False,
+        queue_simulate_provider_unavailable: bool = False,
     ) -> None:
         self._responses = list(responses or [])
         self._healthy = healthy
@@ -166,6 +186,13 @@ class FakeSlskdClient:
         self._raise_on_responses = raise_on_start if raise_on_responses is None else raise_on_responses
         self._poll_count: int = 0
         self._active_searches: dict[str, bool] = {}
+        self._queue_simulate_failures = queue_simulate_failures
+        self._queue_simulate_duplicate = queue_simulate_duplicate
+        self._queue_simulate_locked = queue_simulate_locked
+        self._queue_simulate_user_offline = queue_simulate_user_offline
+        self._queue_simulate_invalid_item = queue_simulate_invalid_item
+        self._queue_simulate_provider_unavailable = queue_simulate_provider_unavailable
+        self._queue_submissions: list[dict[str, Any]] = []
 
     def start_search(self, query_text: str) -> str:
         if self._raise_on_start:
@@ -204,12 +231,30 @@ class FakeSlskdClient:
             return {"status": "ok", "version": "0.0.0-fake"}
         return {"status": "error", "message": "fake client unavailable"}
 
+    def submit_queue(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Simulate a queue submission response."""
+        result = _simulate_slskd_queue_submission(
+            payload,
+            simulate_failures=self._queue_simulate_failures,
+            simulate_duplicate=self._queue_simulate_duplicate,
+            simulate_locked=self._queue_simulate_locked,
+            simulate_user_offline=self._queue_simulate_user_offline,
+            simulate_invalid_item=self._queue_simulate_invalid_item,
+            simulate_provider_unavailable=self._queue_simulate_provider_unavailable,
+        )
+        self._queue_submissions.append(result)
+        return result
+
     @property
     def poll_count(self) -> int:
         return self._poll_count
 
     def was_search_stopped(self, search_id: str) -> bool:
         return self._active_searches.get(search_id, False)
+
+    @property
+    def queue_submissions(self) -> list[dict[str, Any]]:
+        return list(self._queue_submissions)
 
 
 class SlskdHttpClient:
@@ -632,14 +677,15 @@ class SlskdPayloadMapper:
         )
 
 
-class SlskdProvider(SearchProvider):
+class SlskdProvider(SearchProvider, QueueExecutionProvider):
     """Slskd provider adapter for Flux with offline/injected-client search flow.
 
     Without an injected client, it returns controlled unavailable states
     and does NOT access the network.
 
     Core services must NOT import this module directly.
-    They should depend on the generic SearchProvider contract only.
+    They should depend on the generic SearchProvider and QueueExecutionProvider
+    contracts only.
 
     Search flow:
     1. Convert SearchQuery to safe search text.
@@ -649,10 +695,21 @@ class SlskdProvider(SearchProvider):
     5. On completion, call client.get_search_responses().
     6. Map responses to SearchCandidate via SlskdPayloadMapper.
     7. Return SearchProviderResult.
+
+    Queue execution flow (offline/fake only in this commit):
+    1. Convert TransferExecutionRequest to slskd-like payload.
+    2. Call client.submit_queue() (fake/injected only).
+    3. Map response to TransferSubmissionResult.
+    4. Return TransferSubmissionResult.
     """
 
     _SEARCH_CAPABILITIES: list[ProviderCapability] = [
         ProviderCapability.SEARCH,
+        ProviderCapability.HEALTH,
+    ]
+
+    _QUEUE_CAPABILITIES: list[ProviderCapability] = [
+        ProviderCapability.QUEUE_PLANNING,
         ProviderCapability.HEALTH,
     ]
 
@@ -848,3 +905,385 @@ class SlskdProvider(SearchProvider):
 
         timeout_reached = True
         return SearchState.IN_PROGRESS, timeout_reached, warnings
+
+    def submit_queue(self, request: TransferExecutionRequest) -> TransferSubmissionResult:
+        """Submit a queue transfer request via the slskd adapter.
+
+        This is offline/fake only in this commit. No real network calls,
+        no real downloads, no real queue operations.
+
+        Without an injected client that supports submit_queue, returns
+        a controlled unavailable state.
+        """
+        client = self._resolve_client()
+        if client is None:
+            return TransferSubmissionResult(
+                submission_id=str(uuid.uuid4()),
+                request_id=request.request_id,
+                state=TransferSubmissionState.UNAVAILABLE,
+                blocked=True,
+                block_reasons=["slskd adapter has no active client; queue submission unavailable"],
+                errors=["no client configured"],
+            )
+
+        if request.mode == TransferExecutionMode.APPLY and not request.policy.allow_provider_queue:
+            return TransferSubmissionResult(
+                submission_id=str(uuid.uuid4()),
+                request_id=request.request_id,
+                state=TransferSubmissionState.BLOCKED,
+                blocked=True,
+                block_reasons=["provider queue execution not allowed by policy"],
+            )
+
+        if request.queue_plan.blocked:
+            return TransferSubmissionResult(
+                submission_id=str(uuid.uuid4()),
+                request_id=request.request_id,
+                state=TransferSubmissionState.BLOCKED,
+                blocked=True,
+                block_reasons=list(request.queue_plan.block_reasons) or ["queue plan is blocked"],
+            )
+
+        if not request.queue_plan.items:
+            return TransferSubmissionResult(
+                submission_id=str(uuid.uuid4()),
+                request_id=request.request_id,
+                state=TransferSubmissionState.BLOCKED,
+                blocked=True,
+                block_reasons=["queue plan has no items"],
+            )
+
+        payload = SlskdQueuePayloadMapper.map_execution_request_to_slskd_payload(request)
+
+        try:
+            response = client.submit_queue(payload)
+        except Exception as exc:  # noqa: BLE001
+            return TransferSubmissionResult(
+                submission_id=str(uuid.uuid4()),
+                request_id=request.request_id,
+                state=TransferSubmissionState.PROVIDER_ERROR,
+                blocked=True,
+                block_reasons=[f"slskd queue submission failed: {exc}"],
+                errors=["queue submission exception"],
+            )
+
+        return SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(
+            response, request.request_id,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Queue execution (offline/fake mapping only)
+# ---------------------------------------------------------------------------
+
+
+class SlskdQueueSubmissionState(StrEnum):
+    """Internal slskd-like queue submission states.
+
+    These map to Flux TransferSubmissionState but are kept separate
+    to avoid leaking slskd-specific details into the core.
+    """
+
+    QUEUED = "queued"
+    DOWNLOADING = "downloading"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    DUPLICATE = "duplicate"
+    LOCKED = "locked"
+    USER_OFFLINE = "user_offline"
+    INVALID_ITEM = "invalid_item"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+class SlskdQueuePayloadMapper:
+    """Pure mapping functions between Flux transfer execution models and
+    slskd-like queue payloads.
+
+    No network access, no side effects, no raw payload leakage.
+    """
+
+    @staticmethod
+    def map_execution_request_to_slskd_payload(
+        request: TransferExecutionRequest,
+    ) -> dict[str, Any]:
+        """Convert a TransferExecutionRequest into a slskd-like queue payload.
+
+        The result is a safe dict suitable for a fake slskd client.
+        No sensitive data, no raw provider payloads, no api_key.
+        """
+        queue_plan = request.queue_plan
+        items: list[dict[str, Any]] = []
+
+        for queue_item in queue_plan.items:
+            transfer_item = queue_item.transfer_item
+            if transfer_item is None:
+                continue
+            items.append({
+                "username": transfer_item.candidate_id,
+                "filename": transfer_item.filename,
+                "directory": transfer_item.target_relative_path.rsplit("/", 1)[0]
+                if "/" in transfer_item.target_relative_path
+                else ".",
+                "size": transfer_item.size_bytes,
+                "locked": transfer_item.locked,
+                "priority": transfer_item.priority.value,
+            })
+
+        return {
+            "queue_id": queue_plan.queue_id,
+            "request_id": request.request_id,
+            "items": items,
+            "item_count": len(items),
+            "blocked": queue_plan.blocked,
+            "block_reasons": list(queue_plan.block_reasons),
+        }
+
+    @staticmethod
+    def map_slskd_queue_response_to_submission_result(
+        response: dict[str, Any],
+        request_id: str,
+    ) -> TransferSubmissionResult:
+        """Convert a fake slskd queue response into a TransferSubmissionResult.
+
+        Handles: success, failed, duplicate, locked, user_offline,
+        invalid_item, provider_unavailable.
+        """
+        submission_id = response.get("submission_id", str(uuid.uuid4()))
+        raw_items = response.get("items", [])
+        raw_state = response.get("state", SlskdQueueSubmissionState.FAILED.value)
+
+        items: list[TransferSubmissionItem] = []
+        has_errors = False
+        all_blocked = True
+
+        for raw_item in raw_items:
+            item_state = SlskdQueuePayloadMapper._map_item_state(raw_item)
+            message = raw_item.get("message", "")
+            warnings = list(raw_item.get("warnings", []))
+            errors = list(raw_item.get("errors", []))
+
+            if item_state in (
+                TransferSubmissionState.PROVIDER_ERROR,
+                TransferSubmissionState.UNAVAILABLE,
+            ):
+                has_errors = True
+            if item_state not in (
+                TransferSubmissionState.BLOCKED,
+                TransferSubmissionState.LOCKED_ITEM,
+                TransferSubmissionState.DUPLICATE,
+            ):
+                all_blocked = False
+
+            items.append(TransferSubmissionItem(
+                queue_item_id=raw_item.get("queue_item_id", ""),
+                state=item_state,
+                message=message,
+                warnings=warnings,
+                errors=errors,
+            ))
+
+        response_errors = response.get("errors", [])
+
+        if has_errors:
+            overall_state = TransferSubmissionState.PROVIDER_ERROR
+            blocked = True
+        elif not items and raw_state in (
+            SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value,
+            SlskdQueueSubmissionState.USER_OFFLINE.value,
+        ):
+            overall_state = TransferSubmissionState.UNAVAILABLE
+            blocked = True
+        elif response.get("blocked", False):
+            overall_state = TransferSubmissionState.BLOCKED
+            blocked = True
+        elif all_blocked and items:
+            overall_state = TransferSubmissionState.BLOCKED
+            blocked = True
+        else:
+            overall_state = TransferSubmissionState.SUCCESS
+            blocked = False
+
+        return TransferSubmissionResult(
+            submission_id=submission_id,
+            request_id=request_id,
+            state=overall_state,
+            items=items,
+            blocked=blocked,
+            block_reasons=list(response.get("block_reasons", [])),
+            warnings=list(response.get("warnings", [])),
+            errors=list(response.get("errors", [])),
+        )
+
+    @staticmethod
+    def _map_item_state(raw_item: dict[str, Any]) -> TransferSubmissionState:
+        """Map a single raw item state to TransferSubmissionState."""
+        slskd_state = raw_item.get("state", SlskdQueueSubmissionState.FAILED.value)
+        mapping = {
+            SlskdQueueSubmissionState.QUEUED.value: TransferSubmissionState.SUBMITTED,
+            SlskdQueueSubmissionState.DOWNLOADING.value: TransferSubmissionState.SUBMITTED,
+            SlskdQueueSubmissionState.COMPLETE.value: TransferSubmissionState.SUCCESS,
+            SlskdQueueSubmissionState.FAILED.value: TransferSubmissionState.PROVIDER_ERROR,
+            SlskdQueueSubmissionState.DUPLICATE.value: TransferSubmissionState.DUPLICATE,
+            SlskdQueueSubmissionState.LOCKED.value: TransferSubmissionState.LOCKED_ITEM,
+            SlskdQueueSubmissionState.USER_OFFLINE.value: TransferSubmissionState.UNAVAILABLE,
+            SlskdQueueSubmissionState.INVALID_ITEM.value: TransferSubmissionState.PROVIDER_ERROR,
+            SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value: TransferSubmissionState.UNAVAILABLE,
+        }
+        return mapping.get(slskd_state, TransferSubmissionState.PROVIDER_ERROR)
+
+
+def _simulate_slskd_queue_submission(
+    payload: dict[str, Any],
+    *,
+    simulate_failures: bool = False,
+    simulate_duplicate: bool = False,
+    simulate_locked: bool = False,
+    simulate_user_offline: bool = False,
+    simulate_invalid_item: bool = False,
+    simulate_provider_unavailable: bool = False,
+) -> dict[str, Any]:
+    """Simulate a slskd queue submission response.
+
+    Pure function. No network, no side effects.
+    """
+    if simulate_provider_unavailable:
+        return {
+            "submission_id": str(uuid.uuid4()),
+            "state": SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value,
+            "items": [],
+            "blocked": True,
+            "block_reasons": ["slskd provider unavailable"],
+            "errors": ["provider unreachable"],
+        }
+
+    items = payload.get("items", [])
+    result_items: list[dict[str, Any]] = []
+
+    for idx, item in enumerate(items):
+        queue_item_id = f"slskd-qi-{uuid.uuid4().hex[:8]}"
+
+        if simulate_locked and item.get("locked", False):
+            result_items.append({
+                "queue_item_id": queue_item_id,
+                "state": SlskdQueueSubmissionState.LOCKED.value,
+                "message": f"locked file {item.get('filename', 'unknown')}",
+                "warnings": ["item is locked"],
+            })
+            continue
+
+        if simulate_duplicate:
+            result_items.append({
+                "queue_item_id": queue_item_id,
+                "state": SlskdQueueSubmissionState.DUPLICATE.value,
+                "message": f"duplicate {item.get('filename', 'unknown')}",
+                "errors": ["item already in queue"],
+            })
+            continue
+
+        if simulate_user_offline:
+            result_items.append({
+                "queue_item_id": queue_item_id,
+                "state": SlskdQueueSubmissionState.USER_OFFLINE.value,
+                "message": f"user offline for {item.get('filename', 'unknown')}",
+                "errors": ["user is offline"],
+            })
+            continue
+
+        if simulate_invalid_item:
+            result_items.append({
+                "queue_item_id": queue_item_id,
+                "state": SlskdQueueSubmissionState.INVALID_ITEM.value,
+                "message": f"invalid item {item.get('filename', 'unknown')}",
+                "errors": ["invalid file specification"],
+            })
+            continue
+
+        if simulate_failures:
+            result_items.append({
+                "queue_item_id": queue_item_id,
+                "state": SlskdQueueSubmissionState.FAILED.value,
+                "message": f"failed {item.get('filename', 'unknown')}",
+                "errors": ["simulated transfer failure"],
+            })
+            continue
+
+        result_items.append({
+            "queue_item_id": queue_item_id,
+            "state": SlskdQueueSubmissionState.QUEUED.value,
+            "message": f"queued {item.get('filename', 'unknown')}",
+        })
+
+    has_errors = any(
+        i["state"] in (
+            SlskdQueueSubmissionState.FAILED.value,
+            SlskdQueueSubmissionState.USER_OFFLINE.value,
+            SlskdQueueSubmissionState.INVALID_ITEM.value,
+            SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value,
+        )
+        for i in result_items
+    )
+
+    return {
+        "submission_id": str(uuid.uuid4()),
+        "state": (
+            SlskdQueueSubmissionState.FAILED.value
+            if has_errors
+            else SlskdQueueSubmissionState.QUEUED.value
+        ),
+        "items": result_items,
+        "blocked": has_errors or payload.get("blocked", False),
+        "block_reasons": list(payload.get("block_reasons", [])),
+        "warnings": [],
+        "errors": [
+            e for item in result_items for e in item.get("errors", [])
+        ],
+    }
+
+
+# Extend the SlskdClientProtocol with queue methods
+class SlskdClientProtocol(Protocol):
+    """Injectable protocol for slskd-like client interactions.
+
+    Implementations handle actual network communication.
+    This commit provides FakeSlskdClient for tests and
+    SlskdHttpClient for optional real network access.
+
+    The protocol follows a lifecycle:
+    1. start_search(query_text) -> search_id
+    2. get_search_state(search_id) -> state payload
+    3. (poll bounded) repeat step 2 until Completed/ Failed
+    4. get_search_responses(search_id) -> response payload
+    5. stop_search(search_id) -> None (cleanup, especially on timeout)
+
+    Queue execution (offline/fake):
+    6. submit_queue(payload) -> submission response
+    """
+
+    def start_search(self, query_text: str) -> str:
+        """Start a search and return a search identifier."""
+        ...
+
+    def get_search_state(self, search_id: str) -> dict[str, Any]:
+        """Return the current state of a search."""
+        ...
+
+    def get_search_responses(self, search_id: str) -> dict[str, Any]:
+        """Return the collected search responses."""
+        ...
+
+    def stop_search(self, search_id: str) -> None:
+        """Stop/cancel an ongoing search."""
+        ...
+
+    def health_check(self) -> dict[str, Any]:
+        """Return a raw slskd-like health status dict."""
+        ...
+
+    def submit_queue(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Submit a queue transfer request and return a submission response.
+
+        Offline/fake implementations simulate the response.
+        Real implementations would call the slskd downloads API.
+        """
+        ...
+

@@ -1183,3 +1183,456 @@ def test_provider_health_with_fake_client_ignores_allow_network() -> None:
     provider = SlskdProvider(config=config, client=client)
     health = provider.health()
     assert health.availability == ProviderAvailability.AVAILABLE
+
+
+# --- Queue execution (offline/fake only) ---
+
+
+from noqlen_flux.providers.base import QueueExecutionProvider
+from noqlen_flux.providers.slskd import (
+    SlskdQueuePayloadMapper,
+    SlskdQueueSubmissionState,
+    _simulate_slskd_queue_submission,
+)
+from noqlen_flux.transfers import (
+    QueueItem,
+    QueuePlan,
+    QueueState,
+    TransferExecutionMode,
+    TransferExecutionPolicy,
+    TransferExecutionRequest,
+    TransferItem,
+    TransferPriority,
+    TransferSubmissionState,
+)
+
+
+def _fake_queue_plan(
+    *,
+    blocked: bool = False,
+    block_reasons: list[str] | None = None,
+    item_count: int = 1,
+    locked: bool = False,
+) -> QueuePlan:
+    items = []
+    for i in range(item_count):
+        transfer_item = TransferItem(
+            item_id=f"item-{i}",
+            plan_id="plan-1",
+            candidate_id="candidate-1",
+            filename=f"Track {i}.flac",
+            target_relative_path=f"candidate-1/Track {i}.flac",
+            locked=locked,
+            priority=TransferPriority.NORMAL,
+            size_bytes=12345678,
+        )
+        items.append(
+            QueueItem(
+                queue_item_id=f"qi-{i}",
+                transfer_item=transfer_item,
+            )
+        )
+    return QueuePlan(
+        queue_id="queue-1",
+        request_id="req-1",
+        state=QueueState.BLOCKED if blocked else QueueState.READY,
+        items=items,
+        blocked=blocked,
+        block_reasons=block_reasons or [],
+    )
+
+
+def _fake_execution_request(
+    queue_plan: QueuePlan,
+    *,
+    mode: TransferExecutionMode = TransferExecutionMode.DRY_RUN,
+    allow_provider_queue: bool = False,
+) -> TransferExecutionRequest:
+    return TransferExecutionRequest(
+        request_id="exec-1",
+        queue_plan=queue_plan,
+        policy=TransferExecutionPolicy(
+            allow_provider_queue=allow_provider_queue,
+        ),
+        mode=mode,
+    )
+
+
+def test_slskd_provider_implements_queue_execution_provider() -> None:
+    assert issubclass(SlskdProvider, QueueExecutionProvider)
+
+
+def test_slskd_queue_submission_state_values() -> None:
+    assert SlskdQueueSubmissionState.QUEUED.value == "queued"
+    assert SlskdQueueSubmissionState.DOWNLOADING.value == "downloading"
+    assert SlskdQueueSubmissionState.COMPLETE.value == "complete"
+    assert SlskdQueueSubmissionState.FAILED.value == "failed"
+    assert SlskdQueueSubmissionState.DUPLICATE.value == "duplicate"
+    assert SlskdQueueSubmissionState.LOCKED.value == "locked"
+    assert SlskdQueueSubmissionState.USER_OFFLINE.value == "user_offline"
+    assert SlskdQueueSubmissionState.INVALID_ITEM.value == "invalid_item"
+    assert SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value == "provider_unavailable"
+
+
+def test_queue_payload_mapper_maps_request_to_slskd_payload() -> None:
+    plan = _fake_queue_plan(item_count=2)
+    request = _fake_execution_request(plan)
+    payload = SlskdQueuePayloadMapper.map_execution_request_to_slskd_payload(request)
+    assert payload["queue_id"] == "queue-1"
+    assert payload["request_id"] == "exec-1"
+    assert payload["item_count"] == 2
+    assert len(payload["items"]) == 2
+    assert payload["items"][0]["filename"] == "Track 0.flac"
+    assert payload["items"][0]["locked"] is False
+
+
+def test_queue_payload_mapper_maps_blocked_plan() -> None:
+    plan = _fake_queue_plan(blocked=True, block_reasons=["test blocked"])
+    request = _fake_execution_request(plan)
+    payload = SlskdQueuePayloadMapper.map_execution_request_to_slskd_payload(request)
+    assert payload["blocked"] is True
+    assert "test blocked" in payload["block_reasons"]
+
+
+def test_queue_payload_mapper_no_sensitive_data() -> None:
+    plan = _fake_queue_plan()
+    request = TransferExecutionRequest(
+        request_id="exec-1",
+        queue_plan=plan,
+        policy=TransferExecutionPolicy(),
+        metadata={"token": "secret"},
+    )
+    payload = SlskdQueuePayloadMapper.map_execution_request_to_slskd_payload(request)
+    assert "token" not in str(payload)
+    assert "secret" not in str(payload)
+
+
+def test_queue_payload_mapper_maps_response_to_submission_result() -> None:
+    response = {
+        "submission_id": "sub-1",
+        "state": SlskdQueueSubmissionState.QUEUED.value,
+        "items": [
+            {
+                "queue_item_id": "qi-1",
+                "state": SlskdQueueSubmissionState.QUEUED.value,
+                "message": "queued Track 0.flac",
+            },
+        ],
+        "blocked": False,
+        "block_reasons": [],
+        "warnings": [],
+        "errors": [],
+    }
+    result = SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(response, "exec-1")
+    assert result.submission_id == "sub-1"
+    assert result.request_id == "exec-1"
+    assert result.state == TransferSubmissionState.SUCCESS
+    assert len(result.items) == 1
+    assert result.items[0].state == TransferSubmissionState.SUBMITTED
+
+
+def test_queue_payload_mapper_maps_duplicate() -> None:
+    response = {
+        "submission_id": "sub-1",
+        "state": SlskdQueueSubmissionState.DUPLICATE.value,
+        "items": [
+            {
+                "queue_item_id": "qi-1",
+                "state": SlskdQueueSubmissionState.DUPLICATE.value,
+                "message": "duplicate",
+                "errors": ["already in queue"],
+            },
+        ],
+        "blocked": True,
+        "block_reasons": [],
+        "warnings": [],
+        "errors": ["already in queue"],
+    }
+    result = SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(response, "exec-1")
+    assert result.items[0].state == TransferSubmissionState.DUPLICATE
+
+
+def test_queue_payload_mapper_maps_locked() -> None:
+    response = {
+        "submission_id": "sub-1",
+        "state": SlskdQueueSubmissionState.LOCKED.value,
+        "items": [
+            {
+                "queue_item_id": "qi-1",
+                "state": SlskdQueueSubmissionState.LOCKED.value,
+                "message": "locked",
+                "warnings": ["item is locked"],
+            },
+        ],
+        "blocked": True,
+        "block_reasons": [],
+        "warnings": [],
+        "errors": [],
+    }
+    result = SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(response, "exec-1")
+    assert result.items[0].state == TransferSubmissionState.LOCKED_ITEM
+
+
+def test_queue_payload_mapper_maps_user_offline() -> None:
+    response = {
+        "submission_id": "sub-1",
+        "state": SlskdQueueSubmissionState.USER_OFFLINE.value,
+        "items": [
+            {
+                "queue_item_id": "qi-1",
+                "state": SlskdQueueSubmissionState.USER_OFFLINE.value,
+                "message": "user offline",
+                "errors": ["user is offline"],
+            },
+        ],
+        "blocked": True,
+        "block_reasons": [],
+        "warnings": [],
+        "errors": ["user is offline"],
+    }
+    result = SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(response, "exec-1")
+    assert result.items[0].state == TransferSubmissionState.UNAVAILABLE
+    assert result.blocked is True
+
+
+def test_queue_payload_mapper_maps_provider_unavailable() -> None:
+    response = {
+        "submission_id": "sub-1",
+        "state": SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value,
+        "items": [],
+        "blocked": True,
+        "block_reasons": ["provider unavailable"],
+        "warnings": [],
+        "errors": ["provider unreachable"],
+    }
+    result = SlskdQueuePayloadMapper.map_slskd_queue_response_to_submission_result(response, "exec-1")
+    assert result.state == TransferSubmissionState.UNAVAILABLE
+    assert result.blocked is True
+
+
+def test_simulate_queue_submission_success() -> None:
+    payload = {
+        "items": [
+            {"filename": "Track.flac", "locked": False},
+        ],
+        "blocked": False,
+        "block_reasons": [],
+    }
+    result = _simulate_slskd_queue_submission(payload)
+    assert result["state"] == SlskdQueueSubmissionState.QUEUED.value
+    assert len(result["items"]) == 1
+    assert result["items"][0]["state"] == SlskdQueueSubmissionState.QUEUED.value
+
+
+def test_simulate_queue_submission_failures() -> None:
+    payload = {"items": [{"filename": "Track.flac", "locked": False}], "blocked": False, "block_reasons": []}
+    result = _simulate_slskd_queue_submission(payload, simulate_failures=True)
+    assert result["state"] == SlskdQueueSubmissionState.FAILED.value
+    assert result["items"][0]["state"] == SlskdQueueSubmissionState.FAILED.value
+
+
+def test_simulate_queue_submission_duplicate() -> None:
+    payload = {"items": [{"filename": "Track.flac", "locked": False}], "blocked": False, "block_reasons": []}
+    result = _simulate_slskd_queue_submission(payload, simulate_duplicate=True)
+    assert result["items"][0]["state"] == SlskdQueueSubmissionState.DUPLICATE.value
+
+
+def test_simulate_queue_submission_locked() -> None:
+    payload = {"items": [{"filename": "Track.flac", "locked": True}], "blocked": False, "block_reasons": []}
+    result = _simulate_slskd_queue_submission(payload, simulate_locked=True)
+    assert result["items"][0]["state"] == SlskdQueueSubmissionState.LOCKED.value
+
+
+def test_simulate_queue_submission_user_offline() -> None:
+    payload = {"items": [{"filename": "Track.flac", "locked": False}], "blocked": False, "block_reasons": []}
+    result = _simulate_slskd_queue_submission(payload, simulate_user_offline=True)
+    assert result["items"][0]["state"] == SlskdQueueSubmissionState.USER_OFFLINE.value
+
+
+def test_simulate_queue_submission_invalid_item() -> None:
+    payload = {"items": [{"filename": "Track.flac", "locked": False}], "blocked": False, "block_reasons": []}
+    result = _simulate_slskd_queue_submission(payload, simulate_invalid_item=True)
+    assert result["items"][0]["state"] == SlskdQueueSubmissionState.INVALID_ITEM.value
+
+
+def test_simulate_queue_submission_provider_unavailable() -> None:
+    payload = {"items": [{"filename": "Track.flac", "locked": False}], "blocked": False, "block_reasons": []}
+    result = _simulate_slskd_queue_submission(payload, simulate_provider_unavailable=True)
+    assert result["state"] == SlskdQueueSubmissionState.PROVIDER_UNAVAILABLE.value
+    assert result["items"] == []
+
+
+def test_slskd_provider_submit_queue_no_client_returns_unavailable() -> None:
+    provider = SlskdProvider()
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.UNAVAILABLE
+    assert result.blocked is True
+    assert "no active client" in result.block_reasons[0].lower()
+
+
+def test_slskd_provider_submit_queue_with_fake_client_success() -> None:
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.SUCCESS
+    assert len(result.items) == 1
+    assert result.items[0].state == TransferSubmissionState.SUBMITTED
+
+
+def test_slskd_provider_submit_queue_with_fake_client_failures() -> None:
+    client = FakeSlskdClient(queue_simulate_failures=True)
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.PROVIDER_ERROR
+    assert result.blocked is True
+
+
+def test_slskd_provider_submit_queue_with_fake_client_duplicate() -> None:
+    client = FakeSlskdClient(queue_simulate_duplicate=True)
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.items[0].state == TransferSubmissionState.DUPLICATE
+
+
+def test_slskd_provider_submit_queue_with_fake_client_locked() -> None:
+    client = FakeSlskdClient(queue_simulate_locked=True)
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan(locked=True)
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.items[0].state == TransferSubmissionState.LOCKED_ITEM
+
+
+def test_slskd_provider_submit_queue_with_fake_client_user_offline() -> None:
+    client = FakeSlskdClient(queue_simulate_user_offline=True)
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.items[0].state == TransferSubmissionState.UNAVAILABLE
+    assert result.blocked is True
+
+
+def test_slskd_provider_submit_queue_with_fake_client_provider_unavailable() -> None:
+    client = FakeSlskdClient(queue_simulate_provider_unavailable=True)
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.UNAVAILABLE
+    assert result.blocked is True
+
+
+def test_slskd_provider_submit_queue_blocked_plan() -> None:
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan(blocked=True, block_reasons=["test blocked"])
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.blocked is True
+    assert result.state == TransferSubmissionState.BLOCKED
+
+
+def test_slskd_provider_submit_queue_empty_plan() -> None:
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan(item_count=0)
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    result = provider.submit_queue(request)
+    assert result.blocked is True
+    assert "no items" in result.block_reasons[0]
+
+
+def test_slskd_provider_submit_queue_apply_without_policy_blocked() -> None:
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, mode=TransferExecutionMode.APPLY, allow_provider_queue=False)
+    result = provider.submit_queue(request)
+    assert result.blocked is True
+    assert "not allowed" in result.block_reasons[0].lower()
+
+
+def test_slskd_provider_submit_queue_dry_run_succeeds_without_policy() -> None:
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, mode=TransferExecutionMode.DRY_RUN, allow_provider_queue=False)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.SUCCESS
+
+
+def test_fake_slskd_client_queue_submissions_stored() -> None:
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, allow_provider_queue=True)
+    provider.submit_queue(request)
+    assert len(client.queue_submissions) == 1
+
+
+def test_slskd_queue_payload_does_not_leak_raw_payload() -> None:
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan)
+    payload = SlskdQueuePayloadMapper.map_execution_request_to_slskd_payload(request)
+    assert "api_key" not in str(payload)
+    assert "token" not in str(payload)
+    assert "secret" not in str(payload)
+
+
+def test_slskd_queue_no_network_imports_in_mapper() -> None:
+    import noqlen_flux.providers.slskd as mod
+    source = open(mod.__file__).read()
+    mapper_section = source[source.find("class SlskdQueuePayloadMapper"):source.find("class SlskdProvider")]
+    assert "urlopen" not in mapper_section
+    assert "requests" not in mapper_section
+    assert "http" not in mapper_section.lower().split("import")[-1].split("\n")[0]
+
+
+def test_transfer_execution_service_can_use_slskd_provider_via_interface() -> None:
+    from noqlen_flux.services.transfer_execution import TransferExecutionService
+
+    client = FakeSlskdClient()
+    provider = SlskdProvider(client=client)
+    service = TransferExecutionService()
+    plan = _fake_queue_plan()
+    request = service.build_execution_request(
+        plan, mode=TransferExecutionMode.DRY_RUN, allow_provider_queue=True,
+    )
+    result = service.execute_queue(request, provider)
+    assert result.status.value in ("success", "warning")
+    assert len(result.planned_changes) > 0
+
+
+def test_fake_queue_execution_provider_still_works() -> None:
+    from noqlen_flux.providers.fake_queue_execution import FakeQueueExecutionProvider
+
+    provider = FakeQueueExecutionProvider()
+    plan = _fake_queue_plan()
+    request = _fake_execution_request(plan, mode=TransferExecutionMode.DRY_RUN)
+    result = provider.submit_queue(request)
+    assert result.state == TransferSubmissionState.PLANNED
+
+
+def test_no_central_service_imports_slskd_queue() -> None:
+    service_modules = [
+        "noqlen_flux.services.search",
+        "noqlen_flux.services.downloads",
+        "noqlen_flux.services.transfers",
+        "noqlen_flux.services.transfer_execution",
+    ]
+    for mod_name in service_modules:
+        import importlib
+        mod = importlib.import_module(mod_name)
+        for attr_name in dir(mod):
+            obj = getattr(mod, attr_name, None)
+            if hasattr(obj, "__module__"):
+                assert "slskd" not in (getattr(obj, "__module__", "") or "").lower()
