@@ -29,6 +29,7 @@ from noqlen_flux.handoff import (
     HandoffValidationResult,
     _FORBIDDEN_FIELDS,
     validate_relative_path,
+    validate_safe_metadata,
 )
 from noqlen_flux.safety import _TRAVERSAL_MARKERS, is_safe_relative_path
 from noqlen_flux.results import AppliedChange, Artifact, FluxError, FluxResult, FluxWarning, PlannedChange, Severity, Status
@@ -709,7 +710,18 @@ class HandoffManifestService(FluxService):
                 )
                 break
 
-        for data_dict in [item.metadata, item.query_metadata or {}]:
+        dicts_to_check: list[dict[str, Any]] = [
+            item.metadata or {},
+            item.query_metadata or {},
+            item.path.metadata or {},
+            item.quality.metadata if item.quality else {},
+            item.routing.metadata if item.routing else {},
+            item.candidate.metadata if item.candidate else {},
+        ]
+        for report in (item.reports or []):
+            dicts_to_check.append(report.metadata or {})
+
+        for data_dict in dicts_to_check:
             if data_dict:
                 for key in data_dict:
                     normalized_key = key.lower().replace("_", "-")
@@ -914,26 +926,63 @@ def _parse_handoff_item(data: dict[str, Any]) -> HandoffItem:
         relative_path=path_data.get("relative_path", ""),
         workspace_area=path_data.get("workspace_area"),
         description=path_data.get("description"),
-        metadata=path_data.get("metadata", {}),
+        metadata=validate_safe_metadata(path_data.get("metadata", {})),
     )
+    quality_data = data.get("quality")
+    quality_ref = None
+    if isinstance(quality_data, dict):
+        quality_ref = HandoffQualityRef(
+            grade=quality_data.get("grade", ""),
+            confidence=quality_data.get("confidence"),
+            finding_count=quality_data.get("finding_count", 0),
+            objective_failure_count=quality_data.get("objective_failure_count", 0),
+            heuristic_warning_count=quality_data.get("heuristic_warning_count", 0),
+            metadata=validate_safe_metadata(quality_data.get("metadata", {})),
+        )
+    routing_data = data.get("routing")
+    routing_ref = None
+    if isinstance(routing_data, dict):
+        routing_ref = HandoffRoutingRef(
+            outcome=routing_data.get("outcome", ""),
+            action_type=routing_data.get("action_type", ""),
+            reason_count=routing_data.get("reason_count", 0),
+            metadata=validate_safe_metadata(routing_data.get("metadata", {})),
+        )
+    candidate_data = data.get("candidate")
+    candidate_ref = None
+    if isinstance(candidate_data, dict):
+        candidate_ref = HandoffCandidateRef(
+            candidate_id=candidate_data.get("candidate_id"),
+            provider=candidate_data.get("provider"),
+            risk=candidate_data.get("risk"),
+            score=candidate_data.get("score"),
+            metadata=validate_safe_metadata(candidate_data.get("metadata", {})),
+        )
+    reports_raw = data.get("reports", [])
+    reports: list[HandoffReportRef] = []
+    if isinstance(reports_raw, list):
+        for r in reports_raw:
+            if isinstance(r, dict):
+                reports.append(
+                    HandoffReportRef(
+                        kind=r.get("kind", ""),
+                        relative_path=r.get("relative_path"),
+                        description=r.get("description", ""),
+                        metadata=validate_safe_metadata(r.get("metadata", {})),
+                    )
+                )
     return HandoffItem(
         item_id=data.get("item_id", ""),
         item_type=data.get("item_type", "unknown"),
         status=data.get("status", "unknown"),
         path=path_ref,
         forge_ready=data.get("forge_ready", False),
-        query_metadata=data.get("query_metadata"),
-        quality=(
-            HandoffQualityRef(**data["quality"])
-            if isinstance(data.get("quality"), dict)
-            else None
-        ),
-        routing=(
-            HandoffRoutingRef(**data["routing"])
-            if isinstance(data.get("routing"), dict)
-            else None
-        ),
+        query_metadata=validate_safe_metadata(data.get("query_metadata") or {}),
+        quality=quality_ref,
+        routing=routing_ref,
+        candidate=candidate_ref,
         warnings=list(data.get("warnings", [])),
         errors=list(data.get("errors", [])),
-        metadata=data.get("metadata", {}),
+        metadata=validate_safe_metadata(data.get("metadata", {})),
+        reports=reports,
     )

@@ -5,11 +5,15 @@ import pytest
 from noqlen_flux.config import FluxConfig
 from noqlen_flux.handoff import (
     HANDOFF_MANIFEST_VERSION,
+    HandoffCandidateRef,
     HandoffItem,
     HandoffItemStatus,
     HandoffItemType,
     HandoffManifest,
     HandoffPathRef,
+    HandoffQualityRef,
+    HandoffReportRef,
+    HandoffRoutingRef,
     HandoffSource,
 )
 from noqlen_flux.results import Status
@@ -402,3 +406,107 @@ def test_write_manifest_dry_run_returns_planned_change(tmp_path) -> None:
 
     assert len(result.planned_changes) >= 1
     assert len(result.applied_changes) == 0
+
+
+def test_construction_blocks_secret_in_metadata() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        HandoffItem(
+            item_id="item-1",
+            item_type=HandoffItemType.TRACK,
+            status=HandoffItemStatus.APPROVED,
+            path=HandoffPathRef(relative_path="approved/item-1.flac"),
+            metadata={"api_key": "secret123"},
+        )
+
+
+def test_construction_blocks_lyrics_in_query_metadata() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        HandoffItem(
+            item_id="item-1",
+            item_type=HandoffItemType.TRACK,
+            status=HandoffItemStatus.APPROVED,
+            path=HandoffPathRef(relative_path="approved/item-1.flac"),
+            query_metadata={"full_lyrics": "la la la"},
+        )
+
+
+def test_construction_blocks_fingerprint_in_path_metadata() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        HandoffPathRef(
+            relative_path="approved/item-1.flac",
+            metadata={"raw_fingerprint": "abc123"},
+        )
+
+
+def test_construction_blocks_raw_payload_in_quality_metadata() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        HandoffQualityRef(
+            grade="excellent",
+            metadata={"raw_provider_payload": {"data": "secret"}},
+        )
+
+
+def test_construction_blocks_token_in_routing_metadata() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        HandoffRoutingRef(
+            outcome="approved",
+            action_type="plan_only",
+            metadata={"session_token": "tkn123"},
+        )
+
+
+def test_construction_blocks_secret_in_report_metadata() -> None:
+    with pytest.raises(ValueError, match="Forbidden field"):
+        HandoffReportRef(
+            kind="quality-report",
+            relative_path="reports/q.json",
+            metadata={"api_secret": "shh"},
+        )
+
+
+def test_validate_manifest_detects_nested_forbidden_field() -> None:
+    service = HandoffManifestService()
+    item = HandoffItem(
+        item_id="item-1",
+        item_type=HandoffItemType.TRACK,
+        status=HandoffItemStatus.APPROVED,
+        path=HandoffPathRef(relative_path="approved/item-1.flac"),
+    )
+    object.__setattr__(item.path, "metadata", {"raw_fingerprint": "abc123"})
+    manifest = service.build_manifest(items=[item])
+    result = service.validate_manifest(manifest)
+    assert result.valid is False
+    assert any(i.code == "forbidden-field" for i in result.issues)
+
+
+def test_parse_handoff_item_sanitizes_nested_metadata() -> None:
+    from noqlen_flux.services.handoff import _parse_handoff_item
+    data = {
+        "item_id": "item-1",
+        "item_type": "track",
+        "status": "approved",
+        "path": {
+            "relative_path": "approved/item-1.flac",
+            "metadata": {"raw_fingerprint": "abc"},
+        },
+        "quality": {
+            "grade": "excellent",
+            "metadata": {"raw_provider_payload": {"x": 1}},
+        },
+        "routing": {
+            "outcome": "approved",
+            "action_type": "plan_only",
+            "metadata": {"secret": "yes"},
+        },
+        "candidate": {
+            "candidate_id": "c1",
+            "metadata": {"token": "t"},
+        },
+        "reports": [
+            {"kind": "quality-report", "metadata": {"password": "p"}},
+        ],
+        "metadata": {"lyrics": "la la"},
+        "query_metadata": {"full_lyrics": "la la la"},
+    }
+    with pytest.raises(ValueError, match="Forbidden field"):
+        _parse_handoff_item(data)

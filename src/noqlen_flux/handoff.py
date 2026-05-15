@@ -53,6 +53,8 @@ _FORBIDDEN_FIELDS = (
     "provider_payload",
     "secret",
     "token",
+    "api_key",
+    "api_token",
     "password",
     "authorization",
     "cookie",
