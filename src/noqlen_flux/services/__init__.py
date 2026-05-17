@@ -16,6 +16,7 @@ from .musiclab_scenario import MusicLabScenarioRunnerService
 from .musiclab_score_baseline import MusicLabScoreBaselineRunnerService
 from .musiclab_scoring import MusicLabScoringService
 from .providers import ProviderService
+from .provisioning import ProviderProvisioningService
 from .quality import QualityService
 from .reports import ReportService
 from .routing import RoutingDecisionService
@@ -45,6 +46,7 @@ __all__ = [
     "MusicLabScoringService",
     "MusicLabService",
     "ProviderService",
+    "ProviderProvisioningService",
     "QualityService",
     "ReportService",
     "RoutingDecisionService",

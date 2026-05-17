@@ -15,7 +15,7 @@ from .reports import ReportFormat
 from .results import FluxError, FluxResult, Status
 from .scoring import CandidateScore
 from .search import CandidateFile, SearchCandidate, SearchKind, SearchQuery
-from .services import ArtifactRegistrationService, CandidateScoringService, CleanupExecutionService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
+from .services import ArtifactRegistrationService, CandidateScoringService, CleanupExecutionService, CleanupPlanningService, DoctorService, DownloadPlanningService, HandoffManifestService, MusicLabService, ProviderProvisioningService, ProviderService, QualityService, ReportService, RoutingDecisionService, SafeFileOperationService, SearchService, StagingExecutionService, StagingPlanService, TransferExecutionService, TransferPlanningService, WorkspaceService
 from .services.cleanup_execution import build_execution_request_from_plan
 from .transfers import TransferExecutionMode, TransferPriority
 
@@ -376,6 +376,31 @@ def build_parser() -> argparse.ArgumentParser:
     provider_health.add_argument("--api-key-env", help="Environment variable name containing the slskd API key")
     provider_health.add_argument("--allow-network", action="store_true", help="Allow network access for slskd health check")
     provider_health.set_defaults(func=run_provider_health)
+
+    provider_provision = provider_subparsers.add_parser("provision", help="Build or apply safe provider provisioning")
+    provider_provision_subparsers = provider_provision.add_subparsers(dest="provision_provider")
+    provider_provision_slskd = provider_provision_subparsers.add_parser("slskd", help="Provision a managed or external slskd connection profile")
+    slskd_mode = provider_provision_slskd.add_mutually_exclusive_group(required=True)
+    slskd_mode.add_argument("--managed", action="store_true", help="Prepare a managed slskd instance")
+    slskd_mode.add_argument("--external", action="store_true", help="Register an externally managed slskd instance")
+    provider_provision_slskd.add_argument("--workspace", help="Flux-owned workspace for managed provisioning or local secret storage")
+    provider_provision_slskd.add_argument("--url", help="slskd base URL")
+    provider_provision_slskd.add_argument("--api-key-env", help="Environment variable containing external slskd API key")
+    provision_mode = provider_provision_slskd.add_mutually_exclusive_group()
+    provision_mode.add_argument("--dry-run", action="store_true", help="Preview provisioning without writing anything (default)")
+    provision_mode.add_argument("--apply", action="store_true", help="Apply provisioning inside the workspace")
+    provider_provision_slskd.set_defaults(func=run_provider_provision_slskd)
+
+    provider_credentials = provider_subparsers.add_parser("credentials", help="Manage provider credentials")
+    provider_credentials_subparsers = provider_credentials.add_subparsers(dest="credentials_command")
+    provider_credentials_rotate = provider_credentials_subparsers.add_parser("rotate", help="Rotate provider credentials")
+    provider_credentials_rotate_subparsers = provider_credentials_rotate.add_subparsers(dest="credentials_provider")
+    provider_credentials_rotate_slskd = provider_credentials_rotate_subparsers.add_parser("slskd", help="Rotate managed slskd API key reference")
+    provider_credentials_rotate_slskd.add_argument("--workspace", required=True, help="Flux-owned workspace containing the managed slskd secret reference")
+    rotate_mode = provider_credentials_rotate_slskd.add_mutually_exclusive_group()
+    rotate_mode.add_argument("--dry-run", action="store_true", help="Preview rotation without changing secrets (default)")
+    rotate_mode.add_argument("--apply", action="store_true", help="Rotate the stored provider secret reference")
+    provider_credentials_rotate_slskd.set_defaults(func=run_provider_credentials_rotate_slskd)
 
     quality = subparsers.add_parser("quality", help="Inspect post-download quality (contracts-only, no real audio analysis)")
     quality_subparsers = quality.add_subparsers(dest="quality_command")
@@ -1466,6 +1491,57 @@ def run_provider_health(args: argparse.Namespace) -> int:
     return _exit_code(result.status)
 
 
+def run_provider_provision_slskd(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from noqlen_flux.connections import ProviderConnectionMode
+    from noqlen_flux.provisioning import ProviderProvisioningPolicy, ProviderProvisioningRequest
+    from noqlen_flux.providers.slskd_provisioning import SlskdProvisioner
+    from noqlen_flux.secrets import InMemorySecretStoreProvider, LocalWorkspaceSecretStoreProvider
+
+    dry_run = not getattr(args, "apply", False)
+    mode = ProviderConnectionMode.MANAGED if args.managed else ProviderConnectionMode.EXTERNAL
+    workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
+    if mode == ProviderConnectionMode.MANAGED and workspace is None:
+        result = FluxResult(
+            operation="provider-provisioning",
+            status=Status.FAILED,
+            errors=[FluxError(code="missing-workspace", message="managed slskd provisioning requires --workspace")],
+        ).finish(Status.FAILED)
+        print(_render_result(result))
+        return _exit_code(result.status)
+    secret_store = InMemorySecretStoreProvider() if dry_run else LocalWorkspaceSecretStoreProvider(workspace or Path.cwd())
+    request = ProviderProvisioningRequest(
+        provider="slskd",
+        mode=mode,
+        workspace=workspace,
+        base_url=args.url,
+        api_key_env=args.api_key_env,
+        policy=ProviderProvisioningPolicy(allow_config_write=not dry_run and mode == ProviderConnectionMode.MANAGED, allow_secret_write=not dry_run),
+        dry_run=dry_run,
+    )
+    service = ProviderProvisioningService()
+    result = service.apply(request, SlskdProvisioner(), secret_store)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
+def run_provider_credentials_rotate_slskd(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from noqlen_flux.providers.slskd_provisioning import SlskdProvisioner
+    from noqlen_flux.provisioning import CredentialRotationRequest
+    from noqlen_flux.secrets import LocalWorkspaceSecretStoreProvider
+
+    dry_run = not getattr(args, "apply", False)
+    workspace = Path(args.workspace).expanduser().resolve()
+    secret_store = LocalWorkspaceSecretStoreProvider(workspace)
+    request = CredentialRotationRequest(provider="slskd", workspace=workspace, dry_run=dry_run)
+    result = ProviderProvisioningService().rotate_credentials(request, SlskdProvisioner(), secret_store)
+    print(_render_result(result))
+    return _exit_code(result.status)
+
+
 def run_quality_fake(args: argparse.Namespace) -> int:
     result = QualityService().evaluate_fake_quality(
         item_id=args.item_id,
@@ -2185,6 +2261,25 @@ def _render_result(result: FluxResult) -> str:
     state = result.summary.get("state")
     if state is not None:
         lines.append(f"state: {state}")
+    provider_name = result.summary.get("provider")
+    if provider_name is not None and result.operation.startswith("provider-"):
+        lines.append(f"provider: {provider_name}")
+    provider_mode = result.summary.get("mode")
+    if provider_mode is not None and result.operation.startswith("provider-"):
+        lines.append(f"mode: {provider_mode}")
+    restart_required = result.summary.get("restart_required")
+    if restart_required is not None and result.operation.startswith("provider-"):
+        lines.append(f"restart_required: {restart_required}")
+    profile = result.summary.get("profile")
+    if profile is not None and result.operation.startswith("provider-"):
+        base_url = profile.get("base_url")
+        if base_url is not None:
+            lines.append(f"base_url: {base_url}")
+        api_key_ref = profile.get("api_key_ref")
+        if isinstance(api_key_ref, dict):
+            lines.append(f"api_key_ref: {api_key_ref.get('store')}:{api_key_ref.get('key')}:{api_key_ref.get('version')}")
+        elif api_key_ref is not None:
+            lines.append(f"api_key_ref: {api_key_ref}")
     grade = result.summary.get("grade")
     if grade is not None:
         lines.append(f"grade: {grade}")

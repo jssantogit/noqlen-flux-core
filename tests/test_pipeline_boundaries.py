@@ -605,6 +605,14 @@ def test_transfer_planning_service_does_not_execute_provider() -> None:
     assert "slskd" not in source
 
 
+def test_provider_provisioning_service_remains_provider_agnostic() -> None:
+    from noqlen_flux.services import provisioning as provisioning_mod
+
+    source = open(provisioning_mod.__file__).read()
+    assert "slskd" not in source.lower()
+    assert "slskd_provisioning" not in source
+
+
 def test_transfer_execution_service_does_not_import_slskd() -> None:
     from noqlen_flux.services import transfer_execution as mod
     assert "slskd" not in mod.__file__

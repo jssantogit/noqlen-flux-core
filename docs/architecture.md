@@ -49,6 +49,16 @@ Conceptual placeholders such as `DownloadRequest`, `TransferStatus`, and `Downlo
 - UI/search surfaces should consume Flux models, not slskd payloads.
 - The CLI can instantiate `SlskdProvider` directly. Core services must NOT import `providers.slskd`.
 
+## Provider Provisioning And App Profiles
+
+Flux owns generic provisioning contracts in the core: provider connection modes, auth modes, secret references, provisioning requests/plans/results, credential rotation requests/results, and app connection bundles. `ProviderProvisioningService` depends only on `ProviderProvisioner` and `SecretStoreProvider` contracts and must not import `slskd` modules.
+
+`SlskdProvisioner` lives under `providers/slskd_provisioning.py` as an isolated provider adapter. It can generate a slskd API key for managed mode, store it through a secret store, and create a workspace-confined provisioning plan. External mode accepts a URL and API-key source/reference but does not generate or apply managed slskd config.
+
+The app-facing connection profile contains a secret reference such as `api_key_ref`, never raw API key material. `AppConnectionBundle` redacts secrets by default and exists so a future app can receive provider URL/mode/auth metadata while resolving credentials through a safe secret channel. The slskd API key is for the slskd HTTP API, not a native Soulseek login; slskd remains responsible for the Soulseek network connection.
+
+The CLI may instantiate `SlskdProvisioner` for dev/smoke commands. Central services remain provider-agnostic. `NativeSoulseekProvider` remains a future provider and is not implemented here.
+
 ## Provider Boundary
 
 Provider adapters implement the generic `SearchProvider` and `TransferProvider` contracts through a shared `BaseProvider` interface: `name`, `capabilities()`, and `health()`. Core services depend on these contracts only. They must not import `slskd`, native Soulseek code, terminal UI code, or provider-specific payloads.

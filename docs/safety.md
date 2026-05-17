@@ -12,6 +12,8 @@ Report writing follows the same rule. `noqlen-flux report demo --workspace PATH 
 
 MusicLab follows the same rule. `musiclab init`, `musiclab session create`, and `musiclab fixture create` default to planning only; `--apply` must be explicit before any directory or fake fixture file is created.
 
+Provider provisioning follows the same rule. `provider provision slskd` and `provider credentials rotate slskd` default to dry-run; `--apply` is required before writing workspace config or rotating stored secrets. These commands do not start, stop, restart, or contact a real slskd instance.
+
 ## Workspace Root
 
 The workspace root is the Flux-controlled boundary for staging and generated state. It is normalized with `pathlib` before use. Future workflows must operate inside this root unless a separate safety boundary is explicitly designed.
@@ -26,6 +28,14 @@ The initial workspace layout contains these automatic directories:
 - `manifests`
 - `cache`
 - `tmp`
+
+## Secret Handling
+
+Secret material redacts in `repr`, public `to_dict`, CLI output, reports, metadata, and errors by default. Raw secret reveal is available only through explicit one-time methods used by secret-store internals or tests.
+
+Provider connection profiles carry `api_key_ref`, not raw API keys. App connection bundles expose safe profile metadata and secret descriptors only. Generated slskd API keys are for the slskd HTTP API, not native Soulseek login credentials.
+
+Managed slskd provisioning stores secrets through a `SecretStoreProvider` and writes only workspace-confined reference/config files. External slskd provisioning validates URL and credential source but does not control external slskd config. Future Android app integration should use secure storage such as Android Keystore for any app-side credential material.
 
 ## Staging
 

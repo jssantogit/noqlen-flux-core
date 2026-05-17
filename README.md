@@ -34,8 +34,38 @@ This repository is in its initial bootstrap phase. It does not perform real down
 - Safe staging apply workflow for fake workspace scenarios. `staging apply` is dry-run by default, requires explicit `--apply` before writing, requires explicit apply/execution policies inside the service, and is confined to the Flux workspace. Approved items stage under `approved/import-ready`, quarantine under `quarantine`, rejected under `rejected`, and review remains `review/manual` plan-only.
 - Safe handoff manifest foundation for future Flux -> Forge contract (`HandoffManifest`, `HandoffItem`, `HandoffManifestService`).
 - Cleanup planning contracts and fake planning service (`CleanupCandidateKind`, `CleanupActionType`, `CleanupRisk`, `CleanupCandidate`, `CleanupPolicy`, `CleanupDecision`, `CleanupPlan`, `CleanupPlanningService`).
+- Generic provider provisioning, secret references, and app connection profiles for managed or external `slskd` setup. Provisioning is dry-run by default, stores API keys through a `SecretStoreProvider`, and exposes only redacted connection bundles.
 
 No operation currently performs real provider search, downloads, network calls, imports, cleanup, or music library writes.
+
+## Slskd Provisioning
+
+Flux supports two safe provisioning modes for future app integration:
+
+- Managed `slskd`: Flux prepares a workspace-confined managed slskd profile, generates a slskd API key, stores it through a secret store, and writes only safe references into managed config files.
+- External `slskd`: an admin provides the URL and API key source. Flux validates the inputs and stores a safe reference; it does not generate config or control an external slskd instance.
+
+The slskd API key is for the slskd HTTP API. It is not a native Soulseek login. `slskd` remains responsible for the Soulseek network connection and credentials. Flux does not implement a native Soulseek provider in this block.
+
+Preview managed provisioning:
+
+```bash
+noqlen-flux provider provision slskd --managed --workspace ./flux-workspace --dry-run
+```
+
+Apply managed provisioning inside the workspace:
+
+```bash
+noqlen-flux provider provision slskd --managed --workspace ./flux-workspace --apply
+```
+
+Preview an external slskd profile:
+
+```bash
+SLSKD_API_KEY="example" noqlen-flux provider provision slskd --external --url http://127.0.0.1:5030 --api-key-env SLSKD_API_KEY --dry-run
+```
+
+Provisioning output and reports redact secrets by default. Future app clients should consume the safe `AppConnectionBundle`/profile and resolve credentials through platform secure storage. Android clients should store any app-side secret material in secure storage such as Android Keystore, not in plain preferences or logs.
 
 ## Safe Staging Apply
 
